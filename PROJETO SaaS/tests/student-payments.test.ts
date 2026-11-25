@@ -23,6 +23,7 @@ const student = {
 const db = {
   student: { findFirst: vi.fn() },
   extraPayment: { create: vi.fn(), findMany: vi.fn() },
+  paymentParcel: { findFirst: vi.fn(), updateMany: vi.fn() },
 };
 
 function createApp() {
@@ -53,6 +54,8 @@ describe('pagamentos de alunos', () => {
       paymentMethod: 'PIX',
       status: 'CONFIRMED',
     });
+    db.paymentParcel.findFirst.mockResolvedValue({ id: 'parcel-1', status: 'PENDING' });
+    db.paymentParcel.updateMany.mockResolvedValue({ count: 1 });
   });
 
   it('registra valor, forma e data como receita confirmada', async () => {
@@ -131,5 +134,56 @@ describe('pagamentos de alunos', () => {
 
     expect(response.status).toBe(404);
     expect(db.extraPayment.create).not.toHaveBeenCalled();
+  });
+
+  it('confirma uma parcela recorrente com data e forma de pagamento', async () => {
+    const response = await request(createApp())
+      .post('/api/finance/parcels/parcel-1/confirm')
+      .send({ paymentMethod: 'PIX', paidAt: '2026-11-24' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      id: 'parcel-1',
+      status: 'CONFIRMED',
+      confirmedAt: '2026-11-24T12:00:00.000Z',
+      paymentMethod: 'PIX',
+    });
+    expect(db.paymentParcel.findFirst).toHaveBeenCalledWith({
+      where: { id: 'parcel-1' },
+      select: { id: true, status: true },
+    });
+    expect(db.paymentParcel.updateMany).toHaveBeenCalledWith({
+      where: { id: 'parcel-1', status: { in: ['PENDING', 'FAILED'] } },
+      data: {
+        status: 'CONFIRMED',
+        confirmedAt: new Date('2026-11-24T12:00:00.000Z'),
+        paymentMethod: 'PIX',
+      },
+    });
+  });
+
+  it('não confirma parcelas inexistentes ou dados de pagamento inválidos', async () => {
+    const invalid = await request(createApp())
+      .post('/api/finance/parcels/parcel-1/confirm')
+      .send({ paymentMethod: 'CHEQUE', paidAt: '2026-02-30' });
+    expect(invalid.status).toBe(400);
+    expect(db.paymentParcel.findFirst).not.toHaveBeenCalled();
+
+    db.paymentParcel.findFirst.mockResolvedValue(null);
+    const missing = await request(createApp())
+      .post('/api/finance/parcels/other-tenant-parcel/confirm')
+      .send({ paymentMethod: 'PIX', paidAt: '2026-11-24' });
+    expect(missing.status).toBe(404);
+    expect(db.paymentParcel.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('não confirma novamente uma parcela já recebida', async () => {
+    db.paymentParcel.findFirst.mockResolvedValue({ id: 'parcel-1', status: 'CONFIRMED' });
+    const response = await request(createApp())
+      .post('/api/finance/parcels/parcel-1/confirm')
+      .send({ paymentMethod: 'PIX', paidAt: '2026-11-24' });
+
+    expect(response.status).toBe(409);
+    expect(db.paymentParcel.updateMany).not.toHaveBeenCalled();
   });
 });

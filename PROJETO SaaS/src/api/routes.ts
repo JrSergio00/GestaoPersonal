@@ -1,4 +1,4 @@
-import { ContractStatus, ExamStatus, ParcelStatus } from '@prisma/client';
+import { ContractStatus, CycleDuration, ExamStatus, ParcelStatus } from '@prisma/client';
 import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { type AuthenticatedRequest } from './auth';
@@ -13,12 +13,9 @@ const createStudentPaymentSchema = z.object({
   amount: z.number().finite().positive().max(999999999.99)
     .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8),
   paymentMethod: z.enum(['PIX', 'CASH', 'CREDIT_CARD', 'DEBIT_CARD', 'BANK_TRANSFER', 'OTHER']),
-  paidAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
-    const [year, month, day] = value.split('-').map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-  }),
+  paidAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isValidDateOnly),
 });
+const confirmPaymentParcelSchema = createStudentPaymentSchema.omit({ amount: true });
 
 const WEEKDAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'] as const;
 const weekdaySchema = z.enum(WEEKDAY_ORDER);
@@ -49,8 +46,35 @@ const createStudentSchema = z.object({
   ...studentScheduleFields,
   name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(254),
+  monthlyAmount: z.number().finite().positive().max(999999999.99)
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8),
+  contractMonths: z.union([z.literal(3), z.literal(6), z.literal(12)]),
 }).refine(scheduleEndsBeforeMidnight, 'A aula deve terminar até a meia-noite.');
 const setStudentStatusSchema = z.object({ active: z.boolean() });
+
+function isValidDateOnly(value: string) {
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function addMonthsClamped(date: Date, months: number) {
+  const targetMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1, 12));
+  const lastDay = new Date(Date.UTC(targetMonth.getUTCFullYear(), targetMonth.getUTCMonth() + 1, 0, 12)).getUTCDate();
+  const day = Math.min(date.getUTCDate(), lastDay);
+  return new Date(Date.UTC(
+    targetMonth.getUTCFullYear(),
+    targetMonth.getUTCMonth(),
+    day,
+    12,
+  ));
+}
+
+function cycleForMonths(months: 3 | 6 | 12): CycleDuration {
+  if (months === 3) return CycleDuration.MONTHS_3;
+  if (months === 6) return CycleDuration.MONTHS_6;
+  return CycleDuration.MONTHS_12;
+}
 
 function startTimeToMinute(startTime: string) {
   const [hours, minutes] = startTime.split(':').map(Number);
@@ -171,6 +195,7 @@ async function getFinanceData(personalId: string, now: Date) {
   const db = getScopedPrisma(personalId);
   const chartMonths = recentMonths(now, 6);
   const firstMonth = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   const confirmedWhere = {
     status: ParcelStatus.CONFIRMED,
@@ -187,6 +212,7 @@ async function getFinanceData(personalId: string, now: Date) {
     overdueExtras,
     monthlyContracts,
     recentParcels,
+    pendingParcels,
     recentExtras,
   ] = await Promise.all([
     db.paymentParcel.findMany({
@@ -206,10 +232,10 @@ async function getFinanceData(personalId: string, now: Date) {
       select: { amount: true },
     }),
     db.paymentParcel.count({
-      where: { ...outstandingWhere, dueDate: { lt: now } },
+      where: { ...outstandingWhere, dueDate: { lt: today } },
     }),
     db.extraPayment.count({
-      where: { ...outstandingWhere, dueDate: { lt: now } },
+      where: { ...outstandingWhere, dueDate: { lt: today } },
     }),
     db.contract.findMany({
       where: {
@@ -227,6 +253,18 @@ async function getFinanceData(personalId: string, now: Date) {
         amount: true,
         dueDate: true,
         confirmedAt: true,
+        status: true,
+        paymentMethod: true,
+        contract: { select: { student: { select: { name: true } } } },
+      },
+    }),
+    db.paymentParcel.findMany({
+      where: { status: { in: [ParcelStatus.PENDING, ParcelStatus.FAILED] } },
+      orderBy: { dueDate: 'asc' },
+      select: {
+        id: true,
+        amount: true,
+        dueDate: true,
         status: true,
         contract: { select: { student: { select: { name: true } } } },
       },
@@ -261,6 +299,7 @@ async function getFinanceData(personalId: string, now: Date) {
       date: payment.confirmedAt ?? payment.dueDate,
       value: amount(payment.amount),
       status: payment.status,
+      paymentMethod: payment.paymentMethod,
     })),
     ...recentExtras.map((payment) => ({
       id: payment.id,
@@ -287,6 +326,13 @@ async function getFinanceData(personalId: string, now: Date) {
       monthlyContracts.reduce((total, contract) => total + cents(contract.monthlyAmount), 0) / 100,
     receivable: sum(outstandingParcels) + sum(outstandingExtras),
     overdueCount: overdueParcels + overdueExtras,
+    pendingParcels: pendingParcels.map((payment) => ({
+      id: payment.id,
+      student: payment.contract.student.name,
+      dueDate: payment.dueDate.toISOString(),
+      amount: amount(payment.amount),
+      status: payment.status,
+    })),
     chart: chartMonths.map(({ receivedCents, ...month }) => ({
       ...month,
       received: receivedCents / 100,
@@ -529,12 +575,23 @@ export function createApiRouter(requirePersonal: RequestHandler) {
       const current = auth(req);
       const parsed = createStudentSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ error: 'Informe nome, e-mail e uma agenda válida, com ao menos um dia.' });
+        res.status(400).json({ error: 'Informe nome, e-mail, valor mensal, duração do contrato e uma agenda válida, com ao menos um dia.' });
         return;
       }
       const db = getScopedPrisma(current.personalId);
       const startMinute = startTimeToMinute(parsed.data.startTime);
       const proposed = parsed.data.days.map((dayOfWeek) => ({ dayOfWeek, startMinute }));
+      const currentDate = new Date();
+      const contractStartDate = new Date(Date.UTC(
+        currentDate.getUTCFullYear(),
+        currentDate.getUTCMonth(),
+        currentDate.getUTCDate(),
+        12,
+      ));
+      const contractEndDate = addMonthsClamped(contractStartDate, parsed.data.contractMonths);
+      contractEndDate.setUTCDate(contractEndDate.getUTCDate() - 1);
+      const monthlyAmountCents = Math.round(parsed.data.monthlyAmount * 100);
+      const monthlyAmount = (monthlyAmountCents / 100).toFixed(2);
       const result = await db.$transaction(async (tx) => {
         const existing = await tx.studentSchedule.findMany({
           where: {
@@ -566,6 +623,31 @@ export function createApiRouter(requirePersonal: RequestHandler) {
             startMinute,
           })),
         });
+        const contract = await tx.contract.create({
+          data: {
+            personalId: current.personalId,
+            studentId: student.id,
+            cycle: cycleForMonths(parsed.data.contractMonths),
+            status: ContractStatus.SIGNED,
+            totalAmount: (monthlyAmountCents * parsed.data.contractMonths / 100).toFixed(2),
+            monthlyAmount,
+            startDate: contractStartDate,
+            endDate: contractEndDate,
+            signedAt: contractStartDate,
+          },
+          select: { id: true },
+        });
+        await tx.paymentParcel.createMany({
+          data: Array.from({ length: parsed.data.contractMonths }, (_, month) => {
+            const dueDate = addMonthsClamped(contractStartDate, month);
+            return {
+              personalId: current.personalId,
+              contractId: contract.id,
+              dueDate,
+              amount: monthlyAmount,
+            };
+          }),
+        });
         return { conflict: null, student };
       });
       if (result.conflict) {
@@ -590,7 +672,14 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         weeklyFrequency: parsed.data.days.length,
         schedules: parsed.data.days.map((dayOfWeek) => ({ dayOfWeek, startTime: parsed.data.startTime })),
         createdAt: student.createdAt.toISOString(),
-        plan: null,
+        plan: cycleForMonths(parsed.data.contractMonths),
+        contract: {
+          months: parsed.data.contractMonths,
+          monthlyAmount: Number(monthlyAmount),
+          totalAmount: monthlyAmountCents * parsed.data.contractMonths / 100,
+          startDate: contractStartDate.toISOString(),
+          endDate: contractEndDate.toISOString(),
+        },
       });
     } catch (error) {
       next(error);
@@ -1127,6 +1216,64 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         ip: req.ip,
       });
       res.json(finance);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/finance/parcels/:parcelId/confirm', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const parcelId = req.params.parcelId;
+      if (typeof parcelId !== 'string') {
+        res.status(400).json({ error: 'Identificador de parcela inválido.' });
+        return;
+      }
+      const parsed = confirmPaymentParcelSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Informe uma forma de pagamento e uma data válida.' });
+        return;
+      }
+      const db = getScopedPrisma(current.personalId);
+      const parcel = await db.paymentParcel.findFirst({
+        where: { id: parcelId },
+        select: { id: true, status: true },
+      });
+      if (!parcel) {
+        res.status(404).json({ error: 'Parcela não encontrada.' });
+        return;
+      }
+      if (parcel.status !== ParcelStatus.PENDING && parcel.status !== ParcelStatus.FAILED) {
+        res.status(409).json({ error: 'Esta parcela não está pendente de confirmação.' });
+        return;
+      }
+      const confirmedAt = new Date(`${parsed.data.paidAt}T12:00:00.000Z`);
+      const result = await db.paymentParcel.updateMany({
+        where: { id: parcel.id, status: { in: [ParcelStatus.PENDING, ParcelStatus.FAILED] } },
+        data: {
+          status: ParcelStatus.CONFIRMED,
+          confirmedAt,
+          paymentMethod: parsed.data.paymentMethod,
+        },
+      });
+      if (result.count !== 1) {
+        res.status(409).json({ error: 'Esta parcela já foi atualizada. Recarregue o Financeiro.' });
+        return;
+      }
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'WRITE',
+        resource: 'finance.payment-parcel',
+        resourceId: parcel.id,
+        ip: req.ip,
+      });
+      res.json({
+        id: parcel.id,
+        status: ParcelStatus.CONFIRMED,
+        confirmedAt: confirmedAt.toISOString(),
+        paymentMethod: parsed.data.paymentMethod,
+      });
     } catch (error) {
       next(error);
     }

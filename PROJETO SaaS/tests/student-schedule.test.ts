@@ -19,6 +19,8 @@ const db = {
     findFirst: vi.fn(),
     update: vi.fn(),
   },
+  contract: { create: vi.fn() },
+  paymentParcel: { createMany: vi.fn() },
   studentSchedule: {
     findMany: vi.fn(),
     createMany: vi.fn(),
@@ -49,6 +51,11 @@ const scheduleInput = {
   startTime: '08:00',
   days: ['MONDAY', 'WEDNESDAY', 'FRIDAY'],
 };
+const studentRegistrationInput = {
+  ...scheduleInput,
+  monthlyAmount: 150,
+  contractMonths: 3,
+};
 
 describe('agenda semanal de alunos', () => {
   beforeEach(() => {
@@ -63,6 +70,8 @@ describe('agenda semanal de alunos', () => {
       lessonDurationMinutes: 60,
       createdAt,
     });
+    db.contract.create.mockResolvedValue({ id: 'contract-1' });
+    db.paymentParcel.createMany.mockResolvedValue({ count: 3 });
     db.student.findFirst.mockResolvedValue({ id: 'student-1' });
     db.student.update.mockResolvedValue({ id: 'student-1', lessonDurationMinutes: 90 });
     db.studentSchedule.findMany.mockResolvedValue([]);
@@ -73,13 +82,15 @@ describe('agenda semanal de alunos', () => {
   it('cria aluno e agenda semanal em uma única transação', async () => {
     const response = await request(createApp())
       .post('/api/students')
-      .send({ name: 'Ana Silva', email: 'ana@example.com', ...scheduleInput });
+      .send({ name: 'Ana Silva', email: 'ana@example.com', ...studentRegistrationInput });
 
     expect(response.status).toBe(201);
     expect(response.body).toMatchObject({
       id: 'student-1',
       lessonDurationMinutes: 60,
       weeklyFrequency: 3,
+      plan: 'MONTHS_3',
+      contract: { months: 3, monthlyAmount: 150, totalAmount: 450 },
       schedules: [
         { dayOfWeek: 'MONDAY', startTime: '08:00' },
         { dayOfWeek: 'WEDNESDAY', startTime: '08:00' },
@@ -94,6 +105,29 @@ describe('agenda semanal de alunos', () => {
         lessonDurationMinutes: 60,
       },
     });
+    expect(db.contract.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        personalId: 'personal-1',
+        studentId: 'student-1',
+        cycle: 'MONTHS_3',
+        status: 'SIGNED',
+        monthlyAmount: '150.00',
+        totalAmount: '450.00',
+      }),
+      select: { id: true },
+    });
+    const installments: Array<{ amount: string; dueDate: Date; personalId: string }> =
+      db.paymentParcel.createMany.mock.calls[0][0].data;
+    expect(installments).toHaveLength(3);
+    expect(installments.map((parcel) => parcel.amount)).toEqual(['150.00', '150.00', '150.00']);
+    expect(installments.every((parcel) => parcel.dueDate.getUTCDate() === installments[0].dueDate.getUTCDate())).toBe(true);
+    expect(installments[1].dueDate.getUTCMonth()).toBe((installments[0].dueDate.getUTCMonth() + 1) % 12);
+    expect(installments[2].dueDate.getUTCMonth()).toBe((installments[0].dueDate.getUTCMonth() + 2) % 12);
+    expect(installments.map((parcel) => parcel.personalId)).toEqual([
+      'personal-1',
+      'personal-1',
+      'personal-1',
+    ]);
     expect(db.studentSchedule.createMany).toHaveBeenCalledWith({
       data: ['MONDAY', 'WEDNESDAY', 'FRIDAY'].map((dayOfWeek) => ({
         personalId: 'personal-1',
@@ -113,7 +147,7 @@ describe('agenda semanal de alunos', () => {
 
     const response = await request(createApp())
       .post('/api/students')
-      .send({ name: 'Ana Silva', email: 'ana@example.com', ...scheduleInput });
+      .send({ name: 'Ana Silva', email: 'ana@example.com', ...studentRegistrationInput });
 
     expect(response.status).toBe(409);
     expect(response.body.error).toContain('Bruna Costa');
@@ -130,7 +164,7 @@ describe('agenda semanal de alunos', () => {
 
     const response = await request(createApp())
       .post('/api/students')
-      .send({ name: 'Ana Silva', email: 'ana@example.com', ...scheduleInput });
+      .send({ name: 'Ana Silva', email: 'ana@example.com', ...studentRegistrationInput });
 
     expect(response.status).toBe(201);
     expect(db.studentSchedule.createMany).toHaveBeenCalledOnce();
@@ -139,16 +173,16 @@ describe('agenda semanal de alunos', () => {
   it('rejeita frequência vazia, dias duplicados e término após meia-noite', async () => {
     const noDays = await request(createApp())
       .post('/api/students')
-      .send({ name: 'Ana Silva', email: 'ana@example.com', ...scheduleInput, days: [] });
+      .send({ name: 'Ana Silva', email: 'ana@example.com', ...studentRegistrationInput, days: [] });
     const duplicateDays = await request(createApp())
       .post('/api/students')
-      .send({ name: 'Ana Silva', email: 'ana@example.com', ...scheduleInput, days: ['MONDAY', 'MONDAY'] });
+      .send({ name: 'Ana Silva', email: 'ana@example.com', ...studentRegistrationInput, days: ['MONDAY', 'MONDAY'] });
     const overnight = await request(createApp())
       .post('/api/students')
       .send({
         name: 'Ana Silva',
         email: 'ana@example.com',
-        ...scheduleInput,
+        ...studentRegistrationInput,
         startTime: '23:30',
       });
 
@@ -156,6 +190,16 @@ describe('agenda semanal de alunos', () => {
     expect(duplicateDays.status).toBe(400);
     expect(overnight.status).toBe(400);
     expect(db.student.create).not.toHaveBeenCalled();
+  });
+
+  it('exige valor mensal válido e um ciclo contratado suportado', async () => {
+    const response = await request(createApp())
+      .post('/api/students')
+      .send({ name: 'Ana Silva', email: 'ana@example.com', ...studentRegistrationInput, monthlyAmount: 0, contractMonths: 9 });
+
+    expect(response.status).toBe(400);
+    expect(db.student.create).not.toHaveBeenCalled();
+    expect(db.contract.create).not.toHaveBeenCalled();
   });
 
   it('atualiza duração e dias sem permitir conflito', async () => {

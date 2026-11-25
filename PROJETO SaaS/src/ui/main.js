@@ -396,6 +396,14 @@ function financePage(data) {
       <td>${dateLabel(item.date)}</td><td><strong class="money-cell">${money(item.value)}</strong></td>
       <td><span class="status-badge ${style}"><i></i>${label}</span>${item.paymentMethod ? `<small class="payment-method-note">${escapeHTML(paymentMethodLabel(item.paymentMethod))}</small>` : ''}</td></tr>`;
   }).join('');
+  const pendingParcels = (data.pendingParcels ?? []).map((parcel) => {
+    const [label, style] = statusLabels[parcel.status] ?? ['Desconhecido', 'inativo'];
+    return `<tr>
+      <td><div class="table-person">${avatar(initials(parcel.student), colorFor(parcel.id))}<span><strong>${escapeHTML(parcel.student)}</strong><small>Parcela recorrente</small></span></div></td>
+      <td>${dateLabel(parcel.dueDate)}</td><td><strong class="money-cell">${money(parcel.amount)}</strong></td>
+      <td><span class="status-badge ${style}"><i></i>${label}</span></td>
+      <td><button class="outline-button" data-confirm-parcel="${escapeHTML(parcel.id)}">Confirmar</button></td></tr>`;
+  }).join('');
   const totalReceived = data.chart.reduce((total, month) => total + month.received, 0);
 
   return `${pageHeading('Financeiro', 'Recebimentos e pagamentos registrados no seu banco de dados.')}
@@ -404,6 +412,9 @@ function financePage(data) {
       ${metricCard({ label: 'Recebido neste mês', value: money(data.monthlyRevenue), note: 'pagamentos confirmados', change: 'Mês atual', iconName: 'wallet', color: 'icon-green', arrow: false })}
       ${metricCard({ label: 'A receber', value: money(data.receivable), note: `${data.overdueCount} pagamento(s) em atraso`, change: 'Pendentes e falhos', iconName: 'clock', color: 'icon-amber', arrow: false })}
       ${metricCard({ label: 'Receita recorrente', value: money(data.recurringRevenue), note: 'contratos vigentes', change: 'Valor mensal', iconName: 'activity', color: 'icon-violet', arrow: false })}
+    </section>
+    <section class="card table-card transactions-card"><div class="table-toolbar"><div><h2>Parcelas a confirmar</h2><p>Pagamentos mensais de contratos aguardando confirmação.</p></div></div>
+      <div class="table-scroll"><table><thead><tr><th>ALUNO</th><th>VENCIMENTO</th><th>VALOR</th><th>STATUS</th><th>AÇÃO</th></tr></thead><tbody>${pendingParcels || '<tr><td class="empty-state" colspan="5">Nenhuma parcela aguardando confirmação.</td></tr>'}</tbody></table></div>
     </section>
     <article class="card finance-chart-card"><div class="card-heading"><div><h2>Receitas ao longo do tempo</h2><p>Pagamentos confirmados nos últimos 6 meses</p></div></div>
       <div class="chart-wrap finance-chart"><div class="chart-y-labels">${[maxValue, maxValue * 2 / 3, maxValue / 3, 0].map((value) => `<span>${value === 0 ? '0' : new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 }).format(value)}</span>`).join('')}</div><div class="chart-plot"><div class="chart-grid-lines"><span></span><span></span><span></span><span></span></div><div class="chart-bars">${bars || '<p class="empty-inline">Sem movimentações neste período.</p>'}</div></div></div>
@@ -539,13 +550,17 @@ function showToast(message) {
 
 function addStudentModal() {
   const root = document.querySelector('#modal-root');
-  root.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  root.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal student-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-header"><div><p class="eyebrow">SUA EQUIPE</p><h2 id="modal-title">Adicionar aluno</h2><p>Preencha os dados para incluir um novo aluno.</p></div><button class="icon-button" aria-label="Fechar" data-action="close-modal">${icon('close')}</button></div>
     <form id="student-form">
       <label>Nome completo<input name="name" required maxlength="120" placeholder="Ex.: Ana Silva"></label>
       <label>E-mail<input name="email" type="email" required maxlength="254" placeholder="ana@email.com"></label>
+      <div class="contract-fields">
+        <label>Valor mensal<input name="monthlyAmount" type="number" min="0.01" max="999999999.99" step="0.01" required placeholder="0,00"></label>
+        <label>Meses contratados<select name="contractMonths" required><option value="3">3 meses</option><option value="6">6 meses</option><option value="12">12 meses</option></select></label>
+      </div>
       ${scheduleFieldsMarkup()}
-      <p class="modal-error" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" data-action="close-modal">Cancelar</button><button type="submit" class="primary-button">${icon('plus', 16)} Salvar aluno</button></div><p class="modal-disclaimer">A frequência semanal é calculada pelos dias selecionados.</p>
+      <p class="modal-error" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" data-action="close-modal">Cancelar</button><button type="submit" class="primary-button">${icon('plus', 16)} Salvar aluno</button></div><p class="modal-disclaimer">A frequência semanal é calculada pelos dias selecionados. As parcelas vencem mensalmente a partir de hoje e ficam pendentes para confirmação no Financeiro.</p>
     </form>
   </section></div>`;
   root.querySelector('input[name="name"]').focus();
@@ -593,6 +608,19 @@ function addPaymentModal() {
     </form>
   </section></div>`;
   root.querySelector('input[name="amount"]').focus();
+}
+
+function confirmParcelModal(parcelId) {
+  const root = document.querySelector('#modal-root');
+  root.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><p class="eyebrow">FINANCEIRO</p><h2 id="modal-title">Confirmar parcela</h2><p>Registre a data e a forma do pagamento recebido.</p></div><button class="icon-button" aria-label="Fechar" data-action="close-modal">${icon('close')}</button></div>
+    <form id="confirm-parcel-form" data-parcel-id="${escapeHTML(parcelId)}">
+      <label>Forma de pagamento<select name="paymentMethod" required><option value="PIX">Pix</option><option value="CASH">Dinheiro</option><option value="CREDIT_CARD">Cartão de crédito</option><option value="DEBIT_CARD">Cartão de débito</option><option value="BANK_TRANSFER">Transferência bancária</option><option value="OTHER">Outro</option></select></label>
+      <label>Data do pagamento<input name="paidAt" type="date" value="${localDateInputValue()}" required></label>
+      <p class="modal-error" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" data-action="close-modal">Cancelar</button><button type="submit" class="primary-button">${icon('check', 16)} Confirmar pagamento</button></div>
+    </form>
+  </section></div>`;
+  root.querySelector('select[name="paymentMethod"]').focus();
 }
 
 function exerciseFormRow() {
@@ -729,6 +757,9 @@ function bindEvents() {
   }));
   app.querySelectorAll('[data-action="back-to-students"]').forEach((button) => button.addEventListener('click', () => navigate('students')));
   app.querySelectorAll('[data-action="add-payment"]').forEach((button) => button.addEventListener('click', addPaymentModal));
+  app.querySelectorAll('[data-confirm-parcel]').forEach((button) => button.addEventListener('click', () => {
+    if (button.dataset.confirmParcel) confirmParcelModal(button.dataset.confirmParcel);
+  }));
   app.querySelectorAll('[data-schedule-student]').forEach((button) => button.addEventListener('click', () => {
     const id = button.dataset.scheduleStudent;
     const student = pageData?.student?.id === id
@@ -912,6 +943,27 @@ function bindEvents() {
       });
       return;
     }
+    if (form.id === 'confirm-parcel-form') {
+      button.disabled = true;
+      button.textContent = 'Confirmando...';
+      error.textContent = '';
+      void api(`/api/finance/parcels/${encodeURIComponent(form.dataset.parcelId)}/confirm`, {
+        method: 'POST',
+        body: JSON.stringify({
+          paymentMethod: String(data.get('paymentMethod')),
+          paidAt: String(data.get('paidAt')),
+        }),
+      }).then(async () => {
+        document.querySelector('#modal-root').innerHTML = '';
+        await navigate('finance');
+        showToast('Parcela confirmada no Financeiro.');
+      }).catch((saveError) => {
+        error.textContent = saveError.message;
+        button.disabled = false;
+        button.innerHTML = `${icon('check', 16)} Confirmar pagamento`;
+      });
+      return;
+    }
     if (form.id !== 'student-form') return;
     button.disabled = true;
     button.textContent = 'Salvando...';
@@ -921,6 +973,8 @@ function bindEvents() {
       body: JSON.stringify({
         name: String(data.get('name')).trim(),
         email: String(data.get('email')).trim(),
+        monthlyAmount: Number(data.get('monthlyAmount')),
+        contractMonths: Number(data.get('contractMonths')),
         lessonDurationMinutes: Number(data.get('lessonDurationMinutes')),
         startTime: String(data.get('startTime')),
         days: data.getAll('days').map(String),

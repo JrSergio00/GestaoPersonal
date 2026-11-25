@@ -229,13 +229,15 @@ tbody tr:hover { background: #faf9f6; }
 .toast.visible { opacity: 1; transform: translateY(0); }
 .modal-backdrop { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(45 43 39 / 45%); backdrop-filter: blur(3px); }
 .modal { width: min(100%, 430px); padding: 22px; background: #fffefa; border: 1px solid #e8e5de; border-radius: 15px; box-shadow: 0 18px 65px rgb(49 46 39 / 16%); }
+.student-modal { max-height: calc(100vh - 40px); overflow-y: auto; }
 .modal-header { display: flex; justify-content: space-between; gap: 12px; }
 .modal-header h2 { margin: 0; color: #363430; font-family: Manrope, sans-serif; font-size: 18px; }
 .modal-header p:last-child { margin: 6px 0 0; color: #9298a7; font-size: 10px; }
-#student-form, #payment-form, #workout-form { display: grid; gap: 14px; margin-top: 21px; }
-#student-form label, #payment-form label, #workout-form label { display: grid; gap: 6px; color: #555c6d; font-size: 10px; font-weight: 600; }
-#student-form input, #student-form select, #payment-form input, #payment-form select, #workout-form input, #workout-form select { width: 100%; height: 38px; padding: 0 10px; color: #343a4b; background: #fff; border: 1px solid #e7eaf0; border-radius: 7px; font-size: 10px; }
-#student-form input::placeholder, #payment-form input::placeholder, #workout-form input::placeholder { color: #aeb3be; }
+#student-form, #payment-form, #confirm-parcel-form, #workout-form { display: grid; gap: 14px; margin-top: 21px; }
+#student-form label, #payment-form label, #confirm-parcel-form label, #workout-form label { display: grid; gap: 6px; color: #555c6d; font-size: 10px; font-weight: 600; }
+#student-form input, #student-form select, #payment-form input, #payment-form select, #confirm-parcel-form input, #confirm-parcel-form select, #workout-form input, #workout-form select { width: 100%; height: 38px; padding: 0 10px; color: #343a4b; background: #fff; border: 1px solid #e7eaf0; border-radius: 7px; font-size: 10px; }
+#student-form input::placeholder, #payment-form input::placeholder, #confirm-parcel-form input::placeholder, #workout-form input::placeholder { color: #aeb3be; }
+.contract-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .workout-modal { width: min(100%, 700px); max-height: calc(100vh - 40px); overflow-y: auto; }
 .student-options-note { margin: -8px 0 0; color: #9298a7; font-size: 9px; }
 .exercise-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: -7px; }

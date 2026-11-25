@@ -32,15 +32,15 @@ O documento HTML define o idioma `pt-BR`, o título **Ímpetus Fit — Gestão d
 ### Navegação e telas disponíveis
 
 - **Visão geral:** resumo de alunos, treinos e finanças; gráfico de receita recebida em seis meses; contratos próximos do vencimento, alertas e agenda semanal em kanban, com alunos sem horário definido.
-- **Alunos:** listagem paginada, filtro por status, busca, cadastro com agenda semanal e abertura dos detalhes de cada aluno.
+- **Alunos:** listagem paginada, filtro por status, busca, cadastro com valor mensal, duração do contrato e agenda semanal, e abertura dos detalhes de cada aluno.
 - **Detalhes do aluno:** dados cadastrais, horário e frequência semanal, total recebido, histórico de pagamentos e ação para registrar novo pagamento.
 - **Treinos:** criação de planos semanais por aluno, com grupos de exercícios nos dias escolhidos; consulta do treino ativo e do histórico; ativação e desativação manual.
-- **Financeiro:** totais do mês, valores a receber, receita recorrente, gráfico de seis meses e movimentações recentes.
+- **Financeiro:** totais do mês, valores a receber, receita recorrente, parcelas mensais aguardando confirmação, gráfico de seis meses e movimentações recentes.
 
 ### Comportamentos da interface
 
 - Navegação lateral com estado ativo, cabeçalho com busca e adaptação a telas menores.
-- Formulários em modal para cadastro/edição de agenda de aluno e registro de pagamento.
+- Formulários em modal para cadastro/edição de agenda, cadastro de aluno e confirmação de parcelas.
 - Mensagens de carregamento, erro, validação e confirmação de operação.
 - Valores exibidos em reais (BRL) e datas formatadas para `pt-BR`.
 - A sessão do Supabase Auth é persistida em `sessionStorage`.
@@ -76,6 +76,8 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 
 - Aluno pertence a um personal, tem nome, e-mail, duração da aula e status ativo/inativo.
 - E-mail é validado no cadastro.
+- O cadastro exige valor mensal e um contrato de 3, 6 ou 12 meses; cria o contrato assinado e todas as parcelas pendentes na mesma transação do aluno e da agenda.
+- A primeira parcela vence no dia do cadastro; as seguintes vencem mensalmente no mesmo dia, com o último dia do mês usado quando o dia original não existir.
 - Todo aluno novo deve ser criado com ao menos um dia semanal, horário inicial e duração de aula. A frequência semanal é derivada da quantidade de dias cadastrados.
 - O horário de início e a duração são iguais em todos os dias selecionados para o mesmo aluno; a aula não pode passar da meia-noite.
 - Aulas de alunos ativos do mesmo personal não podem se sobrepor no mesmo dia. Intervalos consecutivos são permitidos. Alunos antigos sem agenda permanecem válidos e aparecem no dashboard para configuração.
@@ -94,6 +96,7 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 - Pagamento confirmado é receita recebida e aparece no histórico do aluno e nas movimentações financeiras.
 - A forma de pagamento histórica é preservada. Pagamentos existentes recebem `OTHER` como padrão na migration que introduz o campo.
 - A tela de detalhes soma pagamentos confirmados para mostrar o total recebido pelo aluno.
+- Parcelas geradas pelo contrato não são receita recebida até serem confirmadas na tela Financeiro.
 
 ### Financeiro e dashboard
 
@@ -102,7 +105,8 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 - **A receber:** soma valores de parcelas e receitas avulsas em status `PENDING` ou `FAILED`.
 - **Atrasos:** contagem de itens pendentes ou falhos cuja data de vencimento já passou.
 - **Receita recorrente:** soma mensal (`monthlyAmount`) de contratos `SIGNED` cuja vigência inclui a data atual. Não é o total de pagamentos recebidos; pode ser zero mesmo quando há receitas avulsas confirmadas.
-- **Movimentações:** até dez lançamentos recentes, ordenados pela data de confirmação ou vencimento; receitas avulsas apresentam também a forma de pagamento quando disponível.
+- **Parcelas a confirmar:** lista as parcelas pendentes ou falhas de todos os contratos do tenant. A confirmação solicita data e forma de pagamento e atualiza o recebimento de forma atômica.
+- **Movimentações:** até dez lançamentos recentes, ordenados pela data de confirmação ou vencimento; receitas avulsas e parcelas confirmadas apresentam também a forma de pagamento quando disponível.
 - Valores monetários são convertidos para centavos durante as somas para reduzir erros de arredondamento.
 
 ### Agenda semanal
@@ -126,8 +130,8 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 
 ### Contratos, parcelas, leads e exames
 
-- Contrato tem ciclo de 3, 6 ou 12 meses, valores total e mensal, datas de vigência e status de assinatura/cancelamento/expiração.
-- Parcela pertence a um contrato, possui vencimento, valor, status e data de confirmação opcional.
+- Contrato tem ciclo de 3, 6 ou 12 meses, valores total e mensal, datas de vigência e status de assinatura/cancelamento/expiração. O cadastro de aluno cria um contrato assinado com o valor mensal informado.
+- Parcela pertence a um contrato, possui vencimento, valor, status, data de confirmação e forma de pagamento opcionais. As parcelas do cadastro iniciam pendentes.
 - Leads têm status comercial e podem ser associados a um aluno convertido.
 - Exames têm chave de arquivo, status de revisão e campo opcional para dados extraídos criptografados.
 - Esses modelos e algumas regras de BI/dashboard existem no schema e nos serviços, mas não têm um fluxo completo de gerenciamento nas telas descritas neste documento.
@@ -143,7 +147,7 @@ O banco é PostgreSQL, com identificadores UUID armazenados como `TEXT`, datas `
 | `Student` | `students` | Cadastro do aluno, estado ativo e campos de anonimização/CPF protegido. |
 | `StudentSchedule` | `student_schedules` | Dia da semana e minuto inicial da aula recorrente, vinculados ao aluno e tenant. |
 | `Contract` | `contracts` | Contrato entre personal e aluno; possui parcelas. |
-| `PaymentParcel` | `payment_parcels` | Parcela contratual com valor, vencimento, status e confirmação. |
+| `PaymentParcel` | `payment_parcels` | Parcela contratual com valor, vencimento, status, data de confirmação e forma de pagamento opcional. |
 | `ExtraPayment` | `extra_payments` | Receita avulsa, opcionalmente ligada a um aluno; usada no registro de pagamento individual. |
 | `Workout` | `workouts` | Plano de treino de um aluno, ativo ou mantido no histórico. |
 | `WorkoutExercise` | `workout_exercises` | Exercício e parâmetros (dia da semana, séries, repetições, descanso e ordem) de um plano. |
@@ -183,7 +187,7 @@ As rotas abaixo são montadas sob `/api` e, exceto `/api/config`, exigem autenti
 | `GET` | `/api/dashboard` | Retorna métricas operacionais, contratos próximos, finanças e agenda semanal. |
 | `GET` | `/api/students` | Lista alunos com paginação e filtro de status. |
 | `GET` | `/api/students/options` | Busca alunos ativos para associar a um treino. |
-| `POST` | `/api/students` | Cadastra aluno, duração e agenda semanal; rejeita sobreposição com `409`. |
+| `POST` | `/api/students` | Cadastra aluno, contrato, parcelas mensais e agenda semanal em uma transação; rejeita sobreposição com `409`. |
 | `GET` | `/api/students/:studentId` | Retorna dados do aluno, agenda e histórico de pagamentos. |
 | `PATCH` | `/api/students/:studentId/schedule` | Atualiza duração, horário e dias; rejeita sobreposição com `409`. |
 | `PATCH` | `/api/students/:studentId` | Ativa/desativa aluno; reativação valida conflitos de agenda. |
@@ -192,6 +196,7 @@ As rotas abaixo são montadas sob `/api` e, exceto `/api/config`, exigem autenti
 | `POST` | `/api/workouts` | Cria plano ativo com exercícios; desativa o plano anterior do aluno na mesma transação. |
 | `PATCH` | `/api/workouts/:workoutId` | Ativa ou desativa um treino, mantendo somente um ativo por aluno. |
 | `GET` | `/api/finance` | Retorna totais, gráfico e movimentações financeiras. |
+| `POST` | `/api/finance/parcels/:parcelId/confirm` | Confirma parcela pendente/falha com data e forma de pagamento. |
 
 Respostas da API autenticada usam `Cache-Control: no-store`. Erros inesperados são registrados no servidor e retornam mensagem genérica ao cliente.
 
@@ -208,6 +213,7 @@ O schema Prisma é a referência declarativa; migrations manuais complementam as
 - `20261125125600_add_workout_deactivation_date`: adiciona `workouts.deactivatedAt` e preenche a data para treinos já inativos.
 - `20261125140800_create_workout_tracking`: cria sessões de acompanhamento e registros por série, com checks e FKs compostas para manter o escopo do tenant, treino e exercício.
 - `20261125155000_add_student_class_schedules`: duração da aula, tabela de dias/horários por aluno, índices, validações e chaves estrangeiras compostas de tenant.
+- `20261125164000_add_payment_method_to_payment_parcels`: forma de pagamento opcional para parcelas contratuais.
 
 Aplicar migrations versionadas com `npm run prisma:deploy`. Os scripts manuais devem ser executados conforme seus comentários e somente uma vez em cada banco. Não remover as restrições manuais ao gerar diferenças de schema.
 
@@ -240,6 +246,8 @@ Comandos definidos no `package.json`:
 
 - Pagamentos rejeitam valor inválido, data inexistente, forma desconhecida e aluno inexistente/fora do tenant.
 - Um pagamento válido é persistido como confirmado, tem forma e data registradas e aparece no histórico do aluno.
+- O cadastro de aluno gera um contrato assinado e uma parcela pendente por mês contratado, com valor e vencimento corretos.
+- A confirmação de parcela persiste data e forma, impede confirmação duplicada e atualiza as métricas de receita recebida.
 - Cadastro e edição de agenda rejeitam horários sobrepostos, permitem aulas consecutivas, atualizam a frequência e alimentam as colunas corretas do kanban semanal.
 - Receitas confirmadas refletem-se no total mensal e no gráfico de seis meses; a janela inclui pagamentos datados para o dia atual.
 - Um treino válido exige aluno ativo e pelo menos um exercício; é criado ativo e desativa o plano ativo anterior do mesmo aluno.
