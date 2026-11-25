@@ -29,6 +29,16 @@ const icons = {
 const icon = (name, size = 20) =>
   `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icons[name] ?? ''}</svg>`;
 
+const workoutWeekdays = [
+  { value: 'MONDAY', label: 'Segunda-feira' },
+  { value: 'TUESDAY', label: 'Terça-feira' },
+  { value: 'WEDNESDAY', label: 'Quarta-feira' },
+  { value: 'THURSDAY', label: 'Quinta-feira' },
+  { value: 'FRIDAY', label: 'Sexta-feira' },
+  { value: 'SATURDAY', label: 'Sábado' },
+  { value: 'SUNDAY', label: 'Domingo' },
+];
+
 const money = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 }).format(value);
 const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -47,6 +57,8 @@ let pageError;
 let loading = false;
 let loginMessage = '';
 let pageLoadId = 0;
+let workoutStudentSearchTimer;
+let workoutStudentOptionsRequest = 0;
 
 const app = document.querySelector('#app');
 
@@ -66,6 +78,18 @@ function studentAvatar(student) {
 
 function cycleLabel(cycle) {
   return ({ MONTHS_3: '3 meses', MONTHS_6: '6 meses', MONTHS_12: '12 meses' })[cycle] ?? 'Sem contrato';
+}
+
+function restLabel(seconds) {
+  if (seconds === 0) return 'Sem descanso';
+  if (seconds < 60) return `${seconds}s de descanso`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}min${remainder ? ` ${remainder}s` : ''} de descanso`;
+}
+
+function workoutWeekdayLabel(dayOfWeek) {
+  return workoutWeekdays.find((day) => day.value === dayOfWeek)?.label ?? 'Dia não definido';
 }
 
 function paymentMethodLabel(method) {
@@ -279,29 +303,49 @@ function studentDetailPage(data) {
 
 function workoutCards(data) {
   const query = searchValue.trim().toLocaleLowerCase('pt-BR');
-  const results = data.items.filter((workout) => `${workout.title} ${workout.student.name} ${workout.description ?? ''}`.toLocaleLowerCase('pt-BR').includes(query));
+  const results = data.items.filter((workout) =>
+    `${workout.title} ${workout.student.name} ${workout.description ?? ''} ${workout.exercises.map((exercise) => exercise.name).join(' ')}`
+      .toLocaleLowerCase('pt-BR').includes(query),
+  );
   if (!results.length) return '<div class="empty-card">Nenhum treino encontrado para esta busca.</div>';
   const reviewThreshold = Date.now() - 30 * 86400000;
   return results.map((workout) => {
-    const needsReview = new Date(workout.updatedAt).getTime() < reviewThreshold;
+    const needsReview = workout.active && new Date(workout.updatedAt).getTime() < reviewThreshold;
+    const renderExerciseList = (exercises) => `<ul class="exercise-list">${exercises.map((exercise) => `
+      <li><div><strong>${escapeHTML(exercise.name)}</strong><span>${exercise.sets} séries × ${exercise.repetitions} repetições</span></div><small>${restLabel(exercise.restSeconds)}</small></li>
+    `).join('')}</ul>`;
+    const scheduledDays = workoutWeekdays.map((day) => ({
+      ...day,
+      exercises: workout.exercises.filter((exercise) => exercise.dayOfWeek === day.value),
+    })).filter((day) => day.exercises.length > 0);
+    const legacyExercises = workout.exercises.filter((exercise) => !exercise.dayOfWeek);
+    const exerciseGroups = [
+      ...scheduledDays.map((day) => `<section class="workout-day"><h3>${day.label}</h3>${renderExerciseList(day.exercises)}</section>`),
+      ...(legacyExercises.length
+        ? [`<section class="workout-day"><h3>Dia não definido · treino anterior</h3>${renderExerciseList(legacyExercises)}</section>`]
+        : []),
+    ].join('');
     return `<article class="card workout-card">
-      <div class="workout-card-top"><span class="workout-icon">${icon('dumbbell', 20)}</span></div>
-      <span class="workout-state ${needsReview ? 'state-review' : 'state-active'}"><i></i>${needsReview ? 'Precisa de revisão' : 'Ativo'}</span>
-      <h2>${escapeHTML(workout.title)}</h2><p class="workout-details">${escapeHTML(workout.description ?? 'Sem descrição')}</p>
+      <div class="workout-card-top"><span class="workout-icon">${icon('dumbbell', 20)}</span><button class="outline-button workout-toggle" data-workout-toggle="${escapeHTML(workout.id)}" data-active="${!workout.active}">${workout.active ? 'Desativar treino' : 'Ativar treino'}</button></div>
+      <span class="workout-state ${needsReview ? 'state-review' : workout.active ? 'state-active' : 'state-inactive'}"><i></i>${needsReview ? 'Precisa de revisão' : workout.active ? 'Ativo' : 'Inativo'}</span>
+      <h2>${escapeHTML(workout.title)}</h2>
+      ${workout.description ? `<p class="workout-details">${escapeHTML(workout.description)}</p>` : ''}
+      ${exerciseGroups || '<p class="workout-details">Treino legado sem exercícios detalhados.</p>'}
       <div class="workout-student">${studentAvatar({ id: workout.student.id, name: workout.student.name })}<span>${escapeHTML(workout.student.name)}</span><span class="workout-updated">${relativeDate(workout.updatedAt)}</span></div>
     </article>`;
   }).join('');
 }
 
 function workoutsPage(data) {
-  return `${pageHeading('Treinos', 'Consulte os treinos ativos e as atualizações dos alunos.')}
+  const action = `<button class="primary-button" data-action="add-workout">${icon('plus', 17)} Novo treino</button>`;
+  return `${pageHeading('Treinos', 'Crie e acompanhe os planos de treino dos seus alunos.', action)}
     ${connectionNote()}
     <section class="metrics-grid">
-      ${metricCard({ label: 'Treinos ativos', value: data.total, note: 'registros ativos', change: 'Banco de dados', iconName: 'dumbbell', color: 'icon-blue', arrow: false })}
+      ${metricCard({ label: 'Treinos ativos', value: data.activeCount, note: `${data.total} registros no histórico`, change: 'Um por aluno', iconName: 'dumbbell', color: 'icon-blue', arrow: false })}
       ${metricCard({ label: 'Atualizados recentemente', value: data.active, note: 'atualizados nos últimos 30 dias', change: 'Últimos 30 dias', iconName: 'activity', color: 'icon-green', arrow: false })}
       ${metricCard({ label: 'Precisam de revisão', value: data.needsReview, note: 'sem atualização há mais de 30 dias', change: 'Atenção recomendada', iconName: 'clock', color: 'icon-amber', arrow: false })}
     </section>
-    <div class="section-title-row"><div><h2>Treinos ativos</h2><p>Ordenados pela atualização mais recente</p></div></div>
+    <div class="section-title-row"><div><h2>Treinos e histórico</h2><p>Um treino ativo por aluno; criar um novo desativa o anterior.</p></div></div>
     <section class="workouts-grid">${workoutCards(data)}</section>`;
 }
 
@@ -489,6 +533,109 @@ function addPaymentModal() {
   root.querySelector('input[name="amount"]').focus();
 }
 
+function exerciseFormRow() {
+  return `<div class="exercise-form-row" data-exercise-row>
+    <div class="exercise-form-grid">
+      <label class="exercise-name-field">Nome do exercício<input name="exerciseName" required maxlength="120" placeholder="Ex.: Agachamento"></label>
+      <label>Séries<input name="sets" type="number" min="1" max="100" step="1" required value="3"></label>
+      <label>Repetições<input name="repetitions" type="number" min="1" max="1000" step="1" required value="12"></label>
+      <label>Descanso (segundos)<input name="restSeconds" type="number" min="0" max="3600" step="1" required value="60"></label>
+    </div>
+    <button class="text-button exercise-remove" type="button" data-action="remove-exercise">Remover exercício</button>
+  </div>`;
+}
+
+function workoutDayFormGroup(dayOfWeek = 'MONDAY') {
+  const options = workoutWeekdays.map((day) =>
+    `<option value="${day.value}" ${day.value === dayOfWeek ? 'selected' : ''}>${day.label}</option>`,
+  ).join('');
+  return `<section class="workout-day-form" data-workout-day>
+    <div class="workout-day-form-heading">
+      <label>Dia da semana<select name="dayOfWeek" required>${options}</select></label>
+      <button class="text-button workout-day-remove" type="button" data-action="remove-workout-day">Remover dia</button>
+    </div>
+    <div class="day-exercise-list" data-day-exercise-list>${exerciseFormRow()}</div>
+    <button class="text-button exercise-add" type="button" data-action="add-day-exercise">${icon('plus', 15)} Adicionar exercício neste dia</button>
+  </section>`;
+}
+
+function refreshWorkoutDaySelectors(form) {
+  const groups = [...form.querySelectorAll('[data-workout-day]')];
+  const selectedDays = groups.map((group) => group.querySelector('[name="dayOfWeek"]').value);
+  groups.forEach((group) => {
+    const select = group.querySelector('[name="dayOfWeek"]');
+    [...select.options].forEach((option) => {
+      option.disabled = option.value !== select.value && selectedDays.includes(option.value);
+    });
+  });
+  form.querySelector('[data-action="add-workout-day"]').disabled = groups.length >= workoutWeekdays.length;
+}
+
+async function loadWorkoutStudentOptions(form, query = '') {
+  const requestId = ++workoutStudentOptionsRequest;
+  const select = form.querySelector('select[name="studentId"]');
+  const note = form.querySelector('.student-options-note');
+  const selected = select.selectedOptions[0];
+  const selectedId = select.value;
+  select.disabled = true;
+  note.textContent = 'Carregando alunos...';
+
+  try {
+    const result = await api(`/api/students/options?q=${encodeURIComponent(query)}`);
+    if (!form.isConnected || requestId !== workoutStudentOptionsRequest) return;
+    select.innerHTML = '<option value="">Selecione um aluno</option>';
+    if (selectedId && !result.items.some((student) => student.id === selectedId) && selected) {
+      select.add(new Option(selected.textContent, selectedId, true, true));
+    }
+    result.items.forEach((student) => {
+      select.add(new Option(`${student.name} · ${student.email}`, student.id));
+    });
+    if (result.items.some((student) => student.id === selectedId)) {
+      select.value = selectedId;
+    }
+    select.disabled = result.items.length === 0 && !selectedId;
+    note.textContent = result.items.length === 0
+      ? 'Nenhum aluno ativo encontrado. Confira a busca ou cadastre um aluno primeiro.'
+      : result.hasMore
+        ? 'Mais de 50 alunos encontrados. Digite nome ou e-mail para filtrar.'
+        : `${result.items.length} aluno(s) ativo(s) disponível(is).`;
+  } catch (error) {
+    if (!form.isConnected || requestId !== workoutStudentOptionsRequest) return;
+    select.disabled = true;
+    note.textContent = error.message;
+  }
+}
+
+function addWorkoutModal() {
+  const root = document.querySelector('#modal-root');
+  root.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal workout-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><p class="eyebrow">PLANO DE TREINO</p><h2 id="modal-title">Criar treino semanal</h2><p>Escolha os dias da semana e organize os exercícios de cada dia.</p></div><button class="icon-button" aria-label="Fechar" data-action="close-modal">${icon('close')}</button></div>
+    <form id="workout-form">
+      <label>Nome do treino<input name="title" required maxlength="120" placeholder="Ex.: Treino A · Inferiores"></label>
+      <label>Buscar aluno ativo<input name="studentSearch" type="search" placeholder="Digite nome ou e-mail"></label>
+      <label>Aluno<select name="studentId" required disabled><option value="">Carregando alunos...</option></select></label>
+      <p class="student-options-note" role="status">Carregando alunos...</p>
+      <div class="exercise-list-heading"><strong>Agenda semanal</strong><span>Adicione um conjunto de exercícios para cada dia desejado</span></div>
+      <div id="workout-day-list">${workoutDayFormGroup()}</div>
+      <button class="text-button exercise-add" type="button" data-action="add-workout-day">${icon('plus', 15)} Adicionar dia da semana</button>
+      <p class="modal-error" role="alert"></p>
+      <div class="modal-actions"><button type="button" class="outline-button" data-action="close-modal">Cancelar</button><button type="submit" class="primary-button">${icon('check', 16)} Criar treino semanal ativo</button></div>
+      <p class="modal-disclaimer">O novo plano ficará ativo e substituirá o treino ativo atual deste aluno.</p>
+    </form>
+  </section></div>`;
+  const form = root.querySelector('#workout-form');
+  refreshWorkoutDaySelectors(form);
+  form.querySelector('input[name="title"]').focus();
+  void loadWorkoutStudentOptions(form);
+  form.querySelector('input[name="studentSearch"]').addEventListener('input', (event) => {
+    window.clearTimeout(workoutStudentSearchTimer);
+    const query = event.currentTarget.value.trim();
+    workoutStudentSearchTimer = window.setTimeout(() => {
+      void loadWorkoutStudentOptions(form, query);
+    }, 250);
+  });
+}
+
 function bindEvents() {
   app.querySelectorAll('[data-page]').forEach((button) => button.addEventListener('click', (event) => {
     event.preventDefault();
@@ -503,6 +650,7 @@ function bindEvents() {
   app.querySelectorAll('[data-toast]').forEach((button) => button.addEventListener('click', () => showToast(button.dataset.toast)));
   app.querySelectorAll('[data-action="toggle-menu"]').forEach((button) => button.addEventListener('click', () => document.querySelector('#sidebar')?.classList.toggle('open')));
   app.querySelectorAll('[data-action="add-student"]').forEach((button) => button.addEventListener('click', addStudentModal));
+  app.querySelectorAll('[data-action="add-workout"]').forEach((button) => button.addEventListener('click', addWorkoutModal));
   app.querySelectorAll('[data-student-filter]').forEach((button) => button.addEventListener('click', () => {
     studentFilter = button.dataset.studentFilter;
     studentPageNumber = 1;
@@ -519,6 +667,21 @@ function bindEvents() {
   }));
   app.querySelectorAll('[data-action="back-to-students"]').forEach((button) => button.addEventListener('click', () => navigate('students')));
   app.querySelectorAll('[data-action="add-payment"]').forEach((button) => button.addEventListener('click', addPaymentModal));
+  app.querySelectorAll('[data-workout-toggle]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
+    const active = button.dataset.active === 'true';
+    try {
+      await api(`/api/workouts/${encodeURIComponent(button.dataset.workoutToggle)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ active }),
+      });
+      await navigate('workouts');
+      showToast(active ? 'Treino ativado.' : 'Treino desativado.');
+    } catch (error) {
+      button.disabled = false;
+      showToast(error.message);
+    }
+  }));
   app.querySelectorAll('[data-action="retry"]').forEach((button) => button.addEventListener('click', () => navigate(activePage)));
   app.querySelectorAll('[data-action="sign-out"]').forEach((button) => button.addEventListener('click', async () => {
     const { error } = await supabase.auth.signOut();
@@ -544,6 +707,39 @@ function bindEvents() {
     const closeButton = event.target.closest('button[data-action="close-modal"]');
     if (closeButton || event.target.classList.contains('modal-backdrop')) {
       document.querySelector('#modal-root').innerHTML = '';
+      window.clearTimeout(workoutStudentSearchTimer);
+    }
+    const addWorkoutDay = event.target.closest('button[data-action="add-workout-day"]');
+    if (addWorkoutDay) {
+      const form = document.querySelector('#workout-form');
+      const usedDays = new Set([...form.querySelectorAll('[name="dayOfWeek"]')].map((select) => select.value));
+      const nextDay = workoutWeekdays.find((day) => !usedDays.has(day.value));
+      if (nextDay) {
+        form.querySelector('#workout-day-list').insertAdjacentHTML('beforeend', workoutDayFormGroup(nextDay.value));
+        refreshWorkoutDaySelectors(form);
+      }
+    }
+    const removeWorkoutDay = event.target.closest('button[data-action="remove-workout-day"]');
+    if (removeWorkoutDay) {
+      const form = document.querySelector('#workout-form');
+      if (form.querySelectorAll('[data-workout-day]').length > 1) {
+        removeWorkoutDay.closest('[data-workout-day]').remove();
+        refreshWorkoutDaySelectors(form);
+      }
+    }
+    const addExercise = event.target.closest('button[data-action="add-day-exercise"]');
+    if (addExercise) {
+      addExercise.closest('[data-workout-day]').querySelector('[data-day-exercise-list]').insertAdjacentHTML('beforeend', exerciseFormRow());
+    }
+    const removeExercise = event.target.closest('button[data-action="remove-exercise"]');
+    if (removeExercise) {
+      const rows = removeExercise.closest('[data-day-exercise-list]').querySelectorAll('[data-exercise-row]');
+      if (rows.length > 1) removeExercise.closest('[data-exercise-row]').remove();
+    }
+  });
+  document.querySelector('#modal-root')?.addEventListener('change', (event) => {
+    if (event.target.matches('select[name="dayOfWeek"]')) {
+      refreshWorkoutDaySelectors(document.querySelector('#workout-form'));
     }
   });
   document.querySelector('#modal-root')?.addEventListener('submit', (event) => {
@@ -553,6 +749,37 @@ function bindEvents() {
     const data = new FormData(form);
     const button = form.querySelector('button[type="submit"]');
     const error = form.querySelector('.modal-error');
+    if (form.id === 'workout-form') {
+      const days = [...form.querySelectorAll('[data-workout-day]')].map((group) => ({
+        dayOfWeek: group.querySelector('[name="dayOfWeek"]').value,
+        exercises: [...group.querySelectorAll('[data-exercise-row]')].map((row) => ({
+          name: row.querySelector('[name="exerciseName"]').value.trim(),
+          sets: Number(row.querySelector('[name="sets"]').value),
+          repetitions: Number(row.querySelector('[name="repetitions"]').value),
+          restSeconds: Number(row.querySelector('[name="restSeconds"]').value),
+        })),
+      }));
+      button.disabled = true;
+      button.textContent = 'Criando treino...';
+      error.textContent = '';
+      void api('/api/workouts', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: String(data.get('title')).trim(),
+          studentId: String(data.get('studentId')),
+          days,
+        }),
+      }).then(async () => {
+        document.querySelector('#modal-root').innerHTML = '';
+        await navigate('workouts');
+        showToast('Treino criado e ativado para o aluno.');
+      }).catch((saveError) => {
+        error.textContent = saveError.message;
+        button.disabled = false;
+        button.innerHTML = `${icon('check', 16)} Criar treino semanal ativo`;
+      });
+      return;
+    }
     if (form.id === 'payment-form') {
       button.disabled = true;
       button.textContent = 'Salvando...';

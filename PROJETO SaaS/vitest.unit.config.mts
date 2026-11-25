@@ -7,6 +7,7 @@ export default defineConfig({
       'tests/supabase-rest.test.ts',
       'tests/student-payments.test.ts',
       'tests/dashboard-finance.test.ts',
+      'tests/workouts.test.ts',
     ],
   },
 });

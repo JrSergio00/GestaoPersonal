@@ -71,6 +71,16 @@ enum ExamStatus {
   REJECTED
 }
 
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
 // ---------- Autenticação, LGPD e auditoria ----------
 
 model User {
@@ -143,6 +153,7 @@ model Personal {
   paymentParcels PaymentParcel[]
   extraPayments  ExtraPayment[]
   workouts       Workout[]
+  exercises      WorkoutExercise[]
   exams          Exam[]
 
   @@map("personals")
@@ -277,10 +288,32 @@ model Workout {
 
   personal    Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  exercises   WorkoutExercise[]
 
   @@unique([id, personalId])
   @@index([personalId, studentId, updatedAt])
   @@map("workouts")
+}
+
+model WorkoutExercise {
+  id           String   @id @default(uuid())
+  personalId   String
+  workoutId    String
+  dayOfWeek    Weekday?
+  name         String
+  sets         Int
+  repetitions  Int
+  restSeconds  Int
+  position     Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  personal     Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  workout      Workout  @relation(fields: [workoutId, personalId], references: [id, personalId], onDelete: Restrict)
+
+  @@unique([id, personalId])
+  @@index([personalId, workoutId, dayOfWeek, position])
+  @@map("workout_exercises")
 }
 
 model Exam {

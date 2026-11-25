@@ -21,7 +21,8 @@
     "test:isolation": "vitest run --config vitest.config.mts tests/isolation.test.ts",
     "test:auth": "vitest run --config vitest.unit.config.mts tests/auth.test.ts",
     "test:supabase-rest": "vitest run --config vitest.unit.config.mts tests/supabase-rest.test.ts",
-    "test:student-payments": "vitest run --config vitest.unit.config.mts tests/student-payments.test.ts"
+    "test:student-payments": "vitest run --config vitest.unit.config.mts tests/student-payments.test.ts",
+    "test:workouts": "vitest run --config vitest.unit.config.mts tests/workouts.test.ts"
   },
   "keywords": [],
   "author": "",

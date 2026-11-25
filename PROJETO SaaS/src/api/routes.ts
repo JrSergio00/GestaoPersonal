@@ -25,6 +25,44 @@ const createStudentPaymentSchema = z.object({
   }),
 });
 
+const workoutExerciseSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  sets: z.number().int().min(1).max(100),
+  repetitions: z.number().int().min(1).max(1000),
+  restSeconds: z.number().int().min(0).max(3600),
+});
+
+const workoutDaySchema = z.object({
+  dayOfWeek: z.enum(['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']),
+  exercises: z.array(workoutExerciseSchema).min(1).max(50),
+});
+
+const createWorkoutSchema = z.object({
+  studentId: z.string().min(1),
+  title: z.string().trim().min(1).max(120),
+  days: z.array(workoutDaySchema).min(1).max(7),
+}).superRefine((workout, context) => {
+  const selectedDays = new Set(workout.days.map((day) => day.dayOfWeek));
+  if (selectedDays.size !== workout.days.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['days'],
+      message: 'Cada dia da semana deve aparecer apenas uma vez.',
+    });
+  }
+  if (workout.days.reduce((total, day) => total + day.exercises.length, 0) > 50) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['days'],
+      message: 'O treino pode ter no máximo 50 exercícios.',
+    });
+  }
+});
+
+const setWorkoutStatusSchema = z.object({
+  active: z.boolean(),
+});
+
 function auth(req: AuthenticatedRequest) {
   if (!req.auth) throw new Error('Authenticated request is missing its auth context');
   return req.auth;
@@ -425,6 +463,48 @@ export function createApiRouter(requirePersonal: RequestHandler) {
     }
   });
 
+  router.get('/students/options', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const query = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
+      const db = getScopedPrisma(current.personalId);
+      const where = {
+        active: true,
+        anonymizedAt: null,
+        ...(query
+          ? {
+              OR: [
+                { name: { contains: query, mode: 'insensitive' as const } },
+                { email: { contains: query, mode: 'insensitive' as const } },
+              ],
+            }
+          : {}),
+      };
+      const [students, total] = await Promise.all([
+        db.student.findMany({
+          where,
+          orderBy: { name: 'asc' },
+          take: PAGE_SIZE,
+          select: { id: true, name: true, email: true },
+        }),
+        db.student.count({ where }),
+      ]);
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'READ',
+        resource: 'students.options',
+        ip: req.ip,
+      });
+      res.json({
+        items: students,
+        hasMore: total > students.length,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/students/:studentId', async (req: AuthenticatedRequest, res, next) => {
     try {
       const current = auth(req);
@@ -539,21 +619,36 @@ export function createApiRouter(requirePersonal: RequestHandler) {
     try {
       const current = auth(req);
       const db = getScopedPrisma(current.personalId);
-      const [items, total, active] = await Promise.all([
+      const now = new Date();
+      const staleBefore = new Date(now.getTime() - REVIEW_AFTER_DAYS * DAY_MS);
+      const [items, total, activeCount, recentlyUpdated, needsReview] = await Promise.all([
         db.workout.findMany({
-          where: { active: true },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: [{ active: 'desc' }, { updatedAt: 'desc' }],
           take: 100,
           select: {
             id: true,
             title: true,
             description: true,
+            active: true,
             updatedAt: true,
             student: { select: { id: true, name: true } },
+            exercises: {
+              orderBy: [{ dayOfWeek: 'asc' }, { position: 'asc' }],
+              select: {
+                id: true,
+                dayOfWeek: true,
+                name: true,
+                sets: true,
+                repetitions: true,
+                restSeconds: true,
+              },
+            },
           },
         }),
+        db.workout.count(),
         db.workout.count({ where: { active: true } }),
-        db.workout.count({ where: { active: true, updatedAt: { gte: new Date(Date.now() - REVIEW_AFTER_DAYS * DAY_MS) } } }),
+        db.workout.count({ where: { active: true, updatedAt: { gte: staleBefore } } }),
+        db.workout.count({ where: { active: true, updatedAt: { lt: staleBefore } } }),
       ]);
       await logScopedAccess({
         userId: current.userId,
@@ -568,9 +663,146 @@ export function createApiRouter(requirePersonal: RequestHandler) {
           updatedAt: workout.updatedAt.toISOString(),
         })),
         total,
-        active,
-        needsReview: total - active,
+        activeCount,
+        inactiveCount: total - activeCount,
+        active: recentlyUpdated,
+        needsReview,
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/workouts', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const parsed = createWorkoutSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Informe o aluno, o nome do treino e pelo menos um dia com exercícios válidos.' });
+        return;
+      }
+
+      const db = getScopedPrisma(current.personalId);
+      const student = await db.student.findFirst({
+        where: { id: parsed.data.studentId, active: true, anonymizedAt: null },
+        select: { id: true },
+      });
+      if (!student) {
+        res.status(404).json({ error: 'Aluno ativo não encontrado.' });
+        return;
+      }
+
+      const workout = await db.$transaction(async (tx) => {
+        await tx.workout.updateMany({
+          where: { personalId: current.personalId, studentId: student.id, active: true },
+          data: { active: false },
+        });
+        return tx.workout.create({
+          data: {
+            personalId: current.personalId,
+            studentId: student.id,
+            title: parsed.data.title,
+            active: true,
+            exercises: {
+              create: parsed.data.days.flatMap(({ dayOfWeek, exercises }) => exercises.map((exercise, position) => ({
+                ...exercise,
+                dayOfWeek,
+                position,
+              }))),
+            },
+          },
+          select: {
+            id: true,
+            title: true,
+            active: true,
+            updatedAt: true,
+            student: { select: { id: true, name: true } },
+            exercises: {
+              orderBy: [{ dayOfWeek: 'asc' }, { position: 'asc' }],
+              select: {
+                id: true,
+                dayOfWeek: true,
+                name: true,
+                sets: true,
+                repetitions: true,
+                restSeconds: true,
+              },
+            },
+          },
+        });
+      });
+
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'WRITE',
+        resource: 'workout',
+        resourceId: workout.id,
+        ip: req.ip,
+      });
+      res.status(201).json({
+        ...workout,
+        updatedAt: workout.updatedAt.toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/workouts/:workoutId', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const workoutId = req.params.workoutId;
+      if (typeof workoutId !== 'string') {
+        res.status(400).json({ error: 'Identificador de treino inválido.' });
+        return;
+      }
+      const parsed = setWorkoutStatusSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Informe se o treino deve ficar ativo ou inativo.' });
+        return;
+      }
+
+      const db = getScopedPrisma(current.personalId);
+      const workout = await db.$transaction(async (tx) => {
+        const existing = await tx.workout.findFirst({
+          where: { id: workoutId, personalId: current.personalId },
+          select: { id: true, studentId: true },
+        });
+        if (!existing) return null;
+
+        if (parsed.data.active) {
+          await tx.workout.updateMany({
+            where: {
+              personalId: current.personalId,
+              studentId: existing.studentId,
+              active: true,
+              NOT: { id: existing.id },
+            },
+            data: { active: false },
+          });
+        }
+
+        return tx.workout.update({
+          where: { id: existing.id },
+          data: { active: parsed.data.active },
+          select: { id: true, title: true, active: true },
+        });
+      });
+      if (!workout) {
+        res.status(404).json({ error: 'Treino não encontrado.' });
+        return;
+      }
+
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'WRITE',
+        resource: 'workout',
+        resourceId: workout.id,
+        ip: req.ip,
+      });
+      res.json(workout);
     } catch (error) {
       next(error);
     }

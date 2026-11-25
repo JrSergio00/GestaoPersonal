@@ -34,7 +34,7 @@ O documento HTML define o idioma `pt-BR`, o título **Forma — Gestão do Perso
 - **Visão geral:** resumo de alunos, treinos e finanças; gráfico de receita recebida em seis meses; contratos próximos do vencimento e alertas.
 - **Alunos:** listagem paginada, filtro por status, busca, cadastro básico e abertura dos detalhes de cada aluno.
 - **Detalhes do aluno:** dados cadastrais, total recebido, histórico de pagamentos e ação para registrar novo pagamento.
-- **Treinos:** consulta de treinos ativos e indicação dos que precisam de revisão.
+- **Treinos:** criação de planos semanais por aluno, com grupos de exercícios nos dias escolhidos; consulta do treino ativo e do histórico; ativação e desativação manual.
 - **Financeiro:** totais do mês, valores a receber, receita recorrente, gráfico de seis meses e movimentações recentes.
 
 ### Comportamentos da interface
@@ -104,9 +104,15 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 
 ### Treinos e revisão
 
-- O modelo de treino vincula personal e aluno, tem título, descrição opcional, status ativo e datas de criação/atualização.
+- Um treino é um plano semanal com nome, aluno associado e conjuntos de exercícios organizados pelos dias escolhidos da semana. Cada dia escolhido deve ter pelo menos um exercício; cada exercício registra nome, número de séries, repetições por série e descanso em segundos.
+- Um dia da semana pode aparecer no máximo uma vez em cada plano; cada plano pode abranger de um a sete dias e conter até 50 exercícios no total.
+- Todo plano criado começa ativo. Cada aluno pode ter no máximo um plano ativo: criar um novo desativa automaticamente o plano ativo anterior do mesmo aluno.
+- O personal pode desativar um treino e reativar um treino do histórico; ao reativar, o plano atualmente ativo do aluno é desativado.
+- Planos inativos são mantidos no histórico. Alunos inativos ou anonimizados não podem ser selecionados na criação.
+- Séries e repetições devem ser inteiros positivos; descanso é inteiro em segundos e pode ser zero. Cada dia escolhido exige pelo menos um exercício.
+- Exercícios anteriores à agenda semanal permanecem no histórico com o dia não definido; planos antigos sem exercícios associados são identificados como treinos legados.
 - O dashboard sinaliza treinos ativos sem atualização há mais de 30 dias.
-- A tela atual permite consultar os treinos ativos e identificar os que precisam de revisão. Cadastro e edição de treinos não estão expostos nas rotas/telas atuais.
+- A criação substitui apenas o plano ativo do mesmo aluno; treinos de outros alunos e tenants não são afetados.
 
 ### Contratos, parcelas, leads e exames
 
@@ -128,7 +134,8 @@ O banco é PostgreSQL, com identificadores UUID armazenados como `TEXT`, datas `
 | `Contract` | `contracts` | Contrato entre personal e aluno; possui parcelas. |
 | `PaymentParcel` | `payment_parcels` | Parcela contratual com valor, vencimento, status e confirmação. |
 | `ExtraPayment` | `extra_payments` | Receita avulsa, opcionalmente ligada a um aluno; usada no registro de pagamento individual. |
-| `Workout` | `workouts` | Treino de um aluno, com estado ativo e datas de atualização. |
+| `Workout` | `workouts` | Plano de treino de um aluno, ativo ou mantido no histórico. |
+| `WorkoutExercise` | `workout_exercises` | Exercício e parâmetros (dia da semana, séries, repetições, descanso e ordem) de um plano. |
 | `Lead` | `leads` | Potencial aluno e estado de conversão. |
 | `Exam` | `exams` | Arquivo e estado de revisão de exame do aluno. |
 | `ConsentGrant` | `consent_grants` | Consentimentos versionados por finalidade. |
@@ -163,10 +170,13 @@ As rotas abaixo são montadas sob `/api` e, exceto `/api/config`, exigem autenti
 | `GET` | `/api/me` | Retorna nome e e-mail do personal autenticado. |
 | `GET` | `/api/dashboard` | Retorna métricas operacionais, contratos próximos e finanças. |
 | `GET` | `/api/students` | Lista alunos com paginação e filtro de status. |
+| `GET` | `/api/students/options` | Busca alunos ativos para associar a um treino. |
 | `POST` | `/api/students` | Cadastra aluno com nome e e-mail. |
 | `GET` | `/api/students/:studentId` | Retorna dados do aluno e histórico de pagamentos. |
 | `POST` | `/api/students/:studentId/payments` | Registra pagamento confirmado para aluno do tenant. |
-| `GET` | `/api/workouts` | Lista treinos ativos e contagens de revisão. |
+| `GET` | `/api/workouts` | Lista treinos ativos e históricos com exercícios e contagens de revisão. |
+| `POST` | `/api/workouts` | Cria plano ativo com exercícios; desativa o plano anterior do aluno na mesma transação. |
+| `PATCH` | `/api/workouts/:workoutId` | Ativa ou desativa um treino, mantendo somente um ativo por aluno. |
 | `GET` | `/api/finance` | Retorna totais, gráfico e movimentações financeiras. |
 
 Respostas da API autenticada usam `Cache-Control: no-store`. Erros inesperados são registrados no servidor e retornam mensagem genérica ao cliente.
@@ -179,6 +189,8 @@ O schema Prisma é a referência declarativa; migrations manuais complementam as
 - `manual_integridade`: FKs compostas multi-tenant, consistência de conversão de lead e trigger de auditoria imutável.
 - `manual_supabase_auth_identity`: coluna e índice único para `users.supabaseUserId`.
 - `20261125000000_student_payment_method`: enum `PaymentMethod` e coluna `extra_payments.paymentMethod`, com padrão `OTHER`.
+- `20261125070000_create_student_workouts`: tabela de exercícios e restrições para valores válidos; preserva o plano ativo mais recentemente atualizado se houver duplicidades antigas e cria índice único parcial para garantir no máximo um treino ativo por aluno.
+- `20261125100400_add_weekdays_to_workout_exercises`: enum `Weekday` e coluna anulável `workout_exercises.dayOfWeek`; exercícios antigos ficam sem dia definido e novos planos recebem dias selecionados pelo usuário.
 
 Aplicar migrations versionadas com `npm run prisma:deploy`. Os scripts manuais devem ser executados conforme seus comentários e somente uma vez em cada banco. Não remover as restrições manuais ao gerar diferenças de schema.
 
@@ -201,6 +213,7 @@ Comandos definidos no `package.json`:
 | `npm run prisma:generate` | Gera Prisma Client a partir do schema atual. |
 | `npm run prisma:deploy` | Aplica migrations versionadas pendentes. |
 | `npm run test:student-payments` | Testa registro e leitura do histórico de pagamentos. |
+| `npm run test:workouts` | Testa criação, validação e troca de treino ativo. |
 | `npm run test:auth` | Testa autenticação da API. |
 | `npm run test:supabase-rest` | Testa o adaptador Supabase REST. |
 | `npm run test:isolation` | Executa testes de isolamento multi-tenant no banco de teste configurado. |
@@ -210,5 +223,7 @@ Comandos definidos no `package.json`:
 - Pagamentos rejeitam valor inválido, data inexistente, forma desconhecida e aluno inexistente/fora do tenant.
 - Um pagamento válido é persistido como confirmado, tem forma e data registradas e aparece no histórico do aluno.
 - Receitas confirmadas refletem-se no total mensal e no gráfico de seis meses; a janela inclui pagamentos datados para o dia atual.
+- Um treino válido exige aluno ativo e pelo menos um exercício; é criado ativo e desativa o plano ativo anterior do mesmo aluno.
+- Cada aluno tem no máximo um plano ativo; desativar ou reativar um treino preserva o histórico e a regra de exclusividade.
 - Consultas de um personal não incluem dados de outro.
 - Alterações de schema precisam ser acompanhadas da migration correspondente e da regeneração do Prisma Client antes de reiniciar a API.
