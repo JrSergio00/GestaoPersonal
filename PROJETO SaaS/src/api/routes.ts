@@ -149,6 +149,30 @@ const createWorkoutSchema = z.object({
   }
 });
 
+const workoutSetResultSchema = z.object({
+  repetitions: z.number().int().min(0).max(1000),
+  loadKg: z.number().finite().min(0).max(9999.99)
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8),
+});
+
+const workoutSessionSchema = z.object({
+  dayOfWeek: weekdaySchema,
+  performedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isValidDateOnly),
+  exercises: z.array(z.object({
+    exerciseId: z.string().min(1).max(64),
+    sets: z.array(workoutSetResultSchema).min(1).max(100),
+  })).min(1).max(50),
+}).superRefine((session, context) => {
+  const exerciseIds = new Set(session.exercises.map((exercise) => exercise.exerciseId));
+  if (exerciseIds.size !== session.exercises.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['exercises'],
+      message: 'Cada exercício deve aparecer uma única vez.',
+    });
+  }
+});
+
 const setWorkoutStatusSchema = z.object({
   active: z.boolean(),
 });
@@ -1062,6 +1086,184 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         inactiveCount: total - activeCount,
         active: recentlyUpdated,
         needsReview,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/workouts/:workoutId/tracking', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const workoutId = req.params.workoutId;
+      if (typeof workoutId !== 'string') {
+        res.status(400).json({ error: 'Identificador de treino inválido.' });
+        return;
+      }
+      const db = getScopedPrisma(current.personalId);
+      const workout = await db.workout.findFirst({
+        where: { id: workoutId },
+        select: {
+          id: true,
+          title: true,
+          active: true,
+          student: { select: { id: true, name: true } },
+          exercises: {
+            orderBy: [{ dayOfWeek: 'asc' }, { position: 'asc' }],
+            select: {
+              id: true,
+              dayOfWeek: true,
+              name: true,
+              sets: true,
+              repetitions: true,
+              restSeconds: true,
+            },
+          },
+        },
+      });
+      if (!workout) {
+        res.status(404).json({ error: 'Treino não encontrado.' });
+        return;
+      }
+      const sessions = await db.workoutSession.findMany({
+        where: { workoutId },
+        orderBy: [{ performedAt: 'desc' }, { createdAt: 'desc' }],
+        select: {
+          id: true,
+          dayOfWeek: true,
+          performedAt: true,
+          setLogs: {
+            orderBy: [{ workoutExercise: { position: 'asc' } }, { setNumber: 'asc' }],
+            select: {
+              id: true,
+              setNumber: true,
+              repetitions: true,
+              loadKg: true,
+              workoutExercise: { select: { name: true } },
+            },
+          },
+        },
+      });
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'READ',
+        resource: 'workout.tracking',
+        resourceId: workout.id,
+        ip: req.ip,
+      });
+      res.json({
+        workout,
+        sessions: sessions.map((session) => ({
+          id: session.id,
+          dayOfWeek: session.dayOfWeek,
+          performedAt: session.performedAt.toISOString(),
+          sets: session.setLogs.map((set) => ({
+            id: set.id,
+            exercise: set.workoutExercise.name,
+            setNumber: set.setNumber,
+            repetitions: set.repetitions,
+            loadKg: amount(set.loadKg),
+          })),
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/workouts/:workoutId/sessions', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const workoutId = req.params.workoutId;
+      if (typeof workoutId !== 'string') {
+        res.status(400).json({ error: 'Identificador de treino inválido.' });
+        return;
+      }
+      const parsed = workoutSessionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Informe a data, o dia e os resultados válidos de cada série.' });
+        return;
+      }
+      const db = getScopedPrisma(current.personalId);
+      const performedAt = new Date(`${parsed.data.performedAt}T12:00:00.000Z`);
+      const result = await db.$transaction(async (tx) => {
+        const workout = await tx.workout.findFirst({
+          where: { id: workoutId },
+          select: {
+            id: true,
+            active: true,
+            exercises: {
+              where: { dayOfWeek: parsed.data.dayOfWeek },
+              select: { id: true, sets: true },
+            },
+          },
+        });
+        if (!workout) return { state: 'not-found' as const };
+        if (!workout.active) return { state: 'inactive' as const };
+        if (!workout.exercises.length) return { state: 'day-not-scheduled' as const };
+
+        const submittedExercises = new Map(parsed.data.exercises.map((exercise) => [exercise.exerciseId, exercise]));
+        if (submittedExercises.size !== workout.exercises.length
+          || workout.exercises.some((exercise) => submittedExercises.get(exercise.id)?.sets.length !== exercise.sets)) {
+          return { state: 'invalid-results' as const };
+        }
+
+        const session = await tx.workoutSession.create({
+          data: {
+            personalId: current.personalId,
+            workoutId: workout.id,
+            dayOfWeek: parsed.data.dayOfWeek,
+            performedAt,
+          },
+          select: { id: true },
+        });
+        await tx.workoutSetLog.createMany({
+          data: workout.exercises.flatMap((exercise) => {
+            const submitted = submittedExercises.get(exercise.id)!;
+            return submitted.sets.map((set, index) => ({
+              personalId: current.personalId,
+              sessionId: session.id,
+              workoutId: workout.id,
+              workoutExerciseId: exercise.id,
+              setNumber: index + 1,
+              repetitions: set.repetitions,
+              loadKg: set.loadKg.toFixed(2),
+            }));
+          }),
+        });
+        return { state: 'created' as const, id: session.id };
+      });
+
+      if (result.state === 'not-found') {
+        res.status(404).json({ error: 'Treino não encontrado.' });
+        return;
+      }
+      if (result.state === 'inactive') {
+        res.status(409).json({ error: 'Treinos inativos permitem consulta, mas não novos acompanhamentos.' });
+        return;
+      }
+      if (result.state === 'day-not-scheduled') {
+        res.status(400).json({ error: 'O dia selecionado não tem exercícios programados neste treino.' });
+        return;
+      }
+      if (result.state === 'invalid-results') {
+        res.status(400).json({ error: 'Preencha todas as séries de todos os exercícios do dia.' });
+        return;
+      }
+
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'WRITE',
+        resource: 'workout.session',
+        resourceId: result.id,
+        ip: req.ip,
+      });
+      res.status(201).json({
+        id: result.id,
+        dayOfWeek: parsed.data.dayOfWeek,
+        performedAt: performedAt.toISOString(),
       });
     } catch (error) {
       next(error);

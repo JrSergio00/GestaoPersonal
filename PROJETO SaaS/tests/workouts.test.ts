@@ -26,6 +26,13 @@ const db = {
     updateMany: vi.fn(),
     count: vi.fn(),
   },
+  workoutSession: {
+    findMany: vi.fn(),
+    create: vi.fn(),
+  },
+  workoutSetLog: {
+    createMany: vi.fn(),
+  },
 };
 
 function createApp() {
@@ -52,6 +59,8 @@ describe('treinos dos alunos', () => {
     db.$transaction.mockImplementation(async (operation) => operation(db));
     db.student.findFirst.mockResolvedValue({ id: 'student-1' });
     db.workout.updateMany.mockResolvedValue({ count: 1 });
+    db.workoutSession.findMany.mockResolvedValue([]);
+    db.workoutSetLog.createMany.mockResolvedValue({ count: 0 });
     db.workout.create.mockResolvedValue({
       id: 'workout-new',
       title: 'Treino A',
@@ -298,5 +307,149 @@ describe('treinos dos alunos', () => {
       where: { id: 'workout-active' },
       data: { active: false },
     }));
+  });
+
+  it('lista sessões anteriores com as séries, repetições e cargas registradas', async () => {
+    const performedAt = new Date('2026-11-23T12:00:00.000Z');
+    db.workout.findFirst.mockResolvedValue({
+      id: 'workout-active',
+      title: 'Treino A',
+      active: true,
+      student: { id: 'student-1', name: 'Ana' },
+      exercises: [{
+        id: 'exercise-1',
+        dayOfWeek: 'MONDAY',
+        name: 'Agachamento',
+        sets: 2,
+        repetitions: 12,
+        restSeconds: 60,
+      }],
+    });
+    db.workoutSession.findMany.mockResolvedValue([{
+      id: 'session-1',
+      dayOfWeek: 'MONDAY',
+      performedAt,
+      setLogs: [{
+        id: 'set-1',
+        setNumber: 1,
+        repetitions: 10,
+        loadKg: { toString: () => '25.50' },
+        workoutExercise: { name: 'Agachamento' },
+      }],
+    }]);
+
+    const response = await request(createApp()).get('/api/workouts/workout-active/tracking');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      workout: { id: 'workout-active', active: true },
+      sessions: [{
+        id: 'session-1',
+        dayOfWeek: 'MONDAY',
+        performedAt: performedAt.toISOString(),
+        sets: [{
+          exercise: 'Agachamento',
+          setNumber: 1,
+          repetitions: 10,
+          loadKg: 25.5,
+        }],
+      }],
+    });
+    expect(mocks.getScopedPrisma).toHaveBeenCalledWith('personal-1');
+  });
+
+  it('salva todos os resultados por série em uma sessão transacional', async () => {
+    db.workout.findFirst.mockResolvedValue({
+      id: 'workout-active',
+      active: true,
+      exercises: [{ id: 'exercise-1', sets: 2 }],
+    });
+    db.workoutSession.create.mockResolvedValue({ id: 'session-1' });
+    db.workoutSetLog.createMany.mockResolvedValue({ count: 2 });
+
+    const response = await request(createApp())
+      .post('/api/workouts/workout-active/sessions')
+      .send({
+        dayOfWeek: 'MONDAY',
+        performedAt: '2026-11-23',
+        exercises: [{
+          exerciseId: 'exercise-1',
+          sets: [{ repetitions: 10, loadKg: 25 }, { repetitions: 9, loadKg: 27.5 }],
+        }],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      id: 'session-1',
+      dayOfWeek: 'MONDAY',
+      performedAt: '2026-11-23T12:00:00.000Z',
+    });
+    expect(db.workoutSession.create).toHaveBeenCalledWith({
+      data: {
+        personalId: 'personal-1',
+        workoutId: 'workout-active',
+        dayOfWeek: 'MONDAY',
+        performedAt: new Date('2026-11-23T12:00:00.000Z'),
+      },
+      select: { id: true },
+    });
+    expect(db.workoutSetLog.createMany).toHaveBeenCalledWith({
+      data: [{
+        personalId: 'personal-1',
+        sessionId: 'session-1',
+        workoutId: 'workout-active',
+        workoutExerciseId: 'exercise-1',
+        setNumber: 1,
+        repetitions: 10,
+        loadKg: '25.00',
+      }, {
+        personalId: 'personal-1',
+        sessionId: 'session-1',
+        workoutId: 'workout-active',
+        workoutExerciseId: 'exercise-1',
+        setNumber: 2,
+        repetitions: 9,
+        loadKg: '27.50',
+      }],
+    });
+  });
+
+  it('rejeita resultados incompletos, dias sem treino e planos inativos', async () => {
+    db.workout.findFirst.mockResolvedValue({
+      id: 'workout-active',
+      active: true,
+      exercises: [{ id: 'exercise-1', sets: 2 }],
+    });
+    const incomplete = await request(createApp())
+      .post('/api/workouts/workout-active/sessions')
+      .send({
+        dayOfWeek: 'MONDAY',
+        performedAt: '2026-11-23',
+        exercises: [{ exerciseId: 'exercise-1', sets: [{ repetitions: 10, loadKg: 20 }] }],
+      });
+    expect(incomplete.status).toBe(400);
+    expect(db.workoutSession.create).not.toHaveBeenCalled();
+
+    db.workout.findFirst.mockResolvedValue({ id: 'workout-active', active: true, exercises: [] });
+    const unscheduledDay = await request(createApp())
+      .post('/api/workouts/workout-active/sessions')
+      .send({
+        dayOfWeek: 'MONDAY',
+        performedAt: '2026-11-23',
+        exercises: [{ exerciseId: 'exercise-1', sets: [{ repetitions: 10, loadKg: 20 }] }],
+      });
+    expect(unscheduledDay.status).toBe(400);
+    expect(db.workoutSession.create).not.toHaveBeenCalled();
+
+    db.workout.findFirst.mockResolvedValue({ id: 'workout-active', active: false, exercises: [] });
+    const inactive = await request(createApp())
+      .post('/api/workouts/workout-active/sessions')
+      .send({
+        dayOfWeek: 'MONDAY',
+        performedAt: '2026-11-23',
+        exercises: [{ exerciseId: 'exercise-1', sets: [{ repetitions: 10, loadKg: 20 }] }],
+      });
+    expect(inactive.status).toBe(409);
+    expect(db.workoutSession.create).not.toHaveBeenCalled();
   });
 });

@@ -24,6 +24,8 @@ const TENANT_RULES: Record<string, TenantRule> = {
   PaymentParcel: byTenant,
   ExtraPayment: byTenant,
   Workout: byTenant,
+  WorkoutSession: byTenant,
+  WorkoutSetLog: byTenant,
   Exam: byTenant,
 };
 

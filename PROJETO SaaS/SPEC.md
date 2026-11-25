@@ -127,6 +127,9 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 - Exercícios anteriores à agenda semanal permanecem no histórico com o dia não definido; planos antigos sem exercícios associados são identificados como treinos legados.
 - O dashboard sinaliza treinos ativos sem atualização há mais de 30 dias.
 - A criação substitui apenas o plano ativo do mesmo aluno; treinos de outros alunos e tenants não são afetados.
+- A tela de acompanhamento registra uma sessão por dia programado, com data civil, repetições realizadas e carga em kg para cada série planejada. Repetições aceitam inteiros de 0 a 1000; cargas vão de 0 a 9999,99 kg, com até duas casas decimais.
+- Uma sessão deve conter todos os exercícios do dia e exatamente a quantidade planejada de séries. O dia precisa estar programado e o treino deve estar ativo para permitir novos registros; o histórico de treinos inativos continua consultável.
+- O histórico de sessões é consultado por treino e agrupado na interface em semanas de segunda a domingo. A gravação da sessão e dos resultados por série ocorre na mesma transação e mantém as relações tenant/treino/exercício.
 
 ### Contratos, parcelas, leads e exames
 
@@ -151,6 +154,8 @@ O banco é PostgreSQL, com identificadores UUID armazenados como `TEXT`, datas `
 | `ExtraPayment` | `extra_payments` | Receita avulsa, opcionalmente ligada a um aluno; usada no registro de pagamento individual. |
 | `Workout` | `workouts` | Plano de treino de um aluno, ativo ou mantido no histórico. |
 | `WorkoutExercise` | `workout_exercises` | Exercício e parâmetros (dia da semana, séries, repetições, descanso e ordem) de um plano. |
+| `WorkoutSession` | `workout_sessions` | Sessão de execução de um dia do plano, com data realizada. |
+| `WorkoutSetLog` | `workout_set_logs` | Repetições e carga realizadas em cada série de um exercício da sessão. |
 | `Lead` | `leads` | Potencial aluno e estado de conversão. |
 | `Exam` | `exams` | Arquivo e estado de revisão de exame do aluno. |
 | `ConsentGrant` | `consent_grants` | Consentimentos versionados por finalidade. |
@@ -193,6 +198,8 @@ As rotas abaixo são montadas sob `/api` e, exceto `/api/config`, exigem autenti
 | `PATCH` | `/api/students/:studentId` | Ativa/desativa aluno; reativação valida conflitos de agenda. |
 | `POST` | `/api/students/:studentId/payments` | Registra pagamento confirmado para aluno do tenant. |
 | `GET` | `/api/workouts` | Lista treinos ativos e históricos com exercícios e contagens de revisão. |
+| `GET` | `/api/workouts/:workoutId/tracking` | Retorna o plano e o histórico de sessões com resultados de cada série. |
+| `POST` | `/api/workouts/:workoutId/sessions` | Registra uma sessão completa para um dia programado de um treino ativo. |
 | `POST` | `/api/workouts` | Cria plano ativo com exercícios; desativa o plano anterior do aluno na mesma transação. |
 | `PATCH` | `/api/workouts/:workoutId` | Ativa ou desativa um treino, mantendo somente um ativo por aluno. |
 | `GET` | `/api/finance` | Retorna totais, gráfico e movimentações financeiras. |
@@ -236,7 +243,7 @@ Comandos definidos no `package.json`:
 | `npm run prisma:generate` | Gera Prisma Client a partir do schema atual. |
 | `npm run prisma:deploy` | Aplica migrations versionadas pendentes. |
 | `npm run test:student-payments` | Testa registro e leitura do histórico de pagamentos. |
-| `npm run test:workouts` | Testa criação, validação e troca de treino ativo. |
+| `npm run test:workouts` | Testa treinos e acompanhamento: criação, validação, troca de treino ativo, leitura do histórico e gravação das séries. |
 | `npx vitest run --config vitest.unit.config.mts tests/student-schedule.test.ts` | Testa cadastro, conflito e edição da agenda semanal. |
 | `npm run test:auth` | Testa autenticação da API. |
 | `npm run test:supabase-rest` | Testa o adaptador Supabase REST. |
@@ -252,5 +259,6 @@ Comandos definidos no `package.json`:
 - Receitas confirmadas refletem-se no total mensal e no gráfico de seis meses; a janela inclui pagamentos datados para o dia atual.
 - Um treino válido exige aluno ativo e pelo menos um exercício; é criado ativo e desativa o plano ativo anterior do mesmo aluno.
 - Cada aluno tem no máximo um plano ativo; desativar ou reativar um treino preserva o histórico e a regra de exclusividade.
+- O acompanhamento exige resultados de todas as séries e exercícios programados para o dia, persiste as cargas e repetições em uma transação e não aceita novos registros em treino inativo.
 - Consultas de um personal não incluem dados de outro.
 - Alterações de schema precisam ser acompanhadas da migration correspondente e da regeneração do Prisma Client antes de reiniciar a API.

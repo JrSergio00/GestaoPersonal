@@ -48,6 +48,7 @@ let activePage = 'overview';
 let studentFilter = 'Todos';
 let studentPageNumber = 1;
 let selectedStudentId = null;
+let selectedWorkoutId = null;
 let searchValue = '';
 let supabase;
 let session;
@@ -132,7 +133,7 @@ function sidebar() {
   const links = nav.map((item) => {
     const heading = item.group && item.group !== lastGroup ? `<p class="nav-group">${item.group}</p>` : '';
     if (item.group) lastGroup = item.group;
-    return `${heading}<button class="nav-link ${activePage === item.id || (activePage === 'student-detail' && item.id === 'students') ? 'active' : ''}" data-page="${item.id}">
+    return `${heading}<button class="nav-link ${activePage === item.id || (activePage === 'student-detail' && item.id === 'students') || (activePage === 'workout-tracking' && item.id === 'workouts') ? 'active' : ''}" data-page="${item.id}">
       ${icon(item.icon, 19)}<span>${item.label}</span>${item.count ? `<span class="nav-count">${item.count}</span>` : ''}
     </button>`;
   }).join('');
@@ -361,6 +362,7 @@ function workoutCards(data) {
       ${workout.description ? `<p class="workout-details">${escapeHTML(workout.description)}</p>` : ''}
       ${exerciseGroups || '<p class="workout-details">Treino legado sem exercícios detalhados.</p>'}
       <div class="workout-student">${studentAvatar({ id: workout.student.id, name: workout.student.name })}<span>${escapeHTML(workout.student.name)}</span><span class="workout-updated">${relativeDate(workout.updatedAt)}</span></div>
+      <button class="workout-action" data-workout-track="${escapeHTML(workout.id)}">${icon('activity', 15)} Acompanhar treino</button>
     </article>`;
   }).join('');
 }
@@ -376,6 +378,76 @@ function workoutsPage(data) {
     </section>
     <div class="section-title-row"><div><h2>Treinos e histórico</h2><p>Um treino ativo por aluno; criar um novo desativa o anterior.</p></div></div>
     <section class="workouts-grid">${workoutCards(data)}</section>`;
+}
+
+function workoutTrackingExerciseFields(exercises) {
+  if (!exercises.length) return '<p class="empty-inline">Não há exercícios programados para este dia.</p>';
+  return exercises.map((exercise) => `<section class="tracking-exercise" data-tracking-exercise data-exercise-id="${escapeHTML(exercise.id)}">
+    <div class="tracking-exercise-heading"><div><h3>${escapeHTML(exercise.name)}</h3><p>${exercise.sets} séries planejadas · ${exercise.repetitions} repetições · ${restLabel(exercise.restSeconds)}</p></div></div>
+    <div class="tracking-sets">${Array.from({ length: exercise.sets }, (_, index) => `<div class="tracking-set-row" data-tracking-set>
+      <strong>Série ${index + 1}</strong>
+      <label>Repetições<input name="repetitions" type="number" min="0" max="1000" step="1" value="${exercise.repetitions}" required></label>
+      <label>Carga (kg)<input name="loadKg" type="number" min="0" max="9999.99" step="0.01" inputmode="decimal" placeholder="0,00" required></label>
+    </div>`).join('')}</div>
+  </section>`).join('');
+}
+
+function workoutTrackingHistory(sessions) {
+  if (!sessions.length) return '<p class="empty-inline">Nenhum acompanhamento registrado para este treino.</p>';
+
+  const groupedByWeek = new Map();
+  sessions.forEach((session) => {
+    const date = new Date(`${session.performedAt.slice(0, 10)}T12:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+    const weekStart = date.toISOString().slice(0, 10);
+    if (!groupedByWeek.has(weekStart)) groupedByWeek.set(weekStart, []);
+    groupedByWeek.get(weekStart).push(session);
+  });
+
+  return [...groupedByWeek.entries()].sort(([first], [second]) => second.localeCompare(first)).map(([weekStart, weekSessions]) => {
+    const weekEnd = new Date(`${weekStart}T12:00:00.000Z`);
+    weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+    const historyItems = weekSessions.map((session) => {
+      const exercises = new Map();
+      session.sets.forEach((set) => {
+        if (!exercises.has(set.exercise)) exercises.set(set.exercise, []);
+        exercises.get(set.exercise).push(set);
+      });
+      return `<article class="tracking-session">
+        <div class="tracking-session-heading"><h3>${escapeHTML(workoutWeekdayLabel(session.dayOfWeek))}</h3><time>${dateLabel(session.performedAt)}</time></div>
+        ${[...exercises.entries()].map(([exercise, sets]) => `<section class="tracking-history-exercise">
+          <strong>${escapeHTML(exercise)}</strong>
+          <div class="tracking-history-sets">${sets.map((set) => `<span>Série ${set.setNumber}: ${set.repetitions} reps · ${Number(set.loadKg).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg</span>`).join('')}</div>
+        </section>`).join('')}
+      </article>`;
+    }).join('');
+    return `<section class="tracking-week"><h3>Semana de ${dateLabel(`${weekStart}T12:00:00.000Z`)} a ${dateLabel(weekEnd.toISOString())}</h3>${historyItems}</section>`;
+  }).join('');
+}
+
+function workoutTrackingPage(data) {
+  const { workout } = data;
+  const days = workoutWeekdays.filter((day) => workout.exercises.some((exercise) => exercise.dayOfWeek === day.value));
+  const selectedDay = days[0]?.value;
+  const dayOptions = days.map((day) => `<option value="${day.value}">${day.label}</option>`).join('');
+  const form = workout.active && days.length ? `<form id="tracking-form" class="card tracking-form">
+    <div class="card-heading"><div><h2>Registrar sessão</h2><p>Informe o que foi realizado em cada série.</p></div></div>
+    <div class="tracking-session-fields">
+      <label>Dia do treino<select id="tracking-day" name="dayOfWeek" required>${dayOptions}</select></label>
+      <label>Data da sessão<input type="date" name="performedAt" value="${localDateInputValue()}" required></label>
+    </div>
+    <div id="tracking-exercises">${workoutTrackingExerciseFields(workout.exercises.filter((exercise) => exercise.dayOfWeek === selectedDay))}</div>
+    <p class="tracking-error" role="alert"></p>
+    <div class="modal-actions"><button class="primary-button" type="submit">${icon('check', 16)} Salvar acompanhamento</button></div>
+  </form>` : workout.active
+    ? '<div class="card empty-card">Este treino não possui exercícios organizados por dia e não pode receber novos acompanhamentos.</div>'
+    : '<div class="card tracking-inactive-note">Este treino está inativo. Você pode consultar o histórico, mas não registrar novas sessões.</div>';
+
+  return `${pageHeading(escapeHTML(workout.title), `${escapeHTML(workout.student.name)} · ${workout.active ? 'Treino ativo' : 'Treino inativo'}`, '<button class="outline-button" data-action="back-to-workouts">Voltar aos treinos</button>')}
+    ${form}
+    <section class="card tracking-history"><div class="card-heading"><div><h2>Histórico de acompanhamento</h2><p>Sessões agrupadas por semana, de segunda a domingo.</p></div></div>
+      ${workoutTrackingHistory(data.sessions)}
+    </section>`;
 }
 
 function financePage(data) {
@@ -425,8 +497,8 @@ function financePage(data) {
     </section>`;
 }
 
-const pages = { overview: dashboard, students: studentPage, 'student-detail': studentDetailPage, workouts: workoutsPage, finance: financePage };
-const titles = { overview: 'Visão geral', students: 'Alunos', 'student-detail': 'Aluno', workouts: 'Treinos', finance: 'Financeiro' };
+const pages = { overview: dashboard, students: studentPage, 'student-detail': studentDetailPage, workouts: workoutsPage, 'workout-tracking': workoutTrackingPage, finance: financePage };
+const titles = { overview: 'Visão geral', students: 'Alunos', 'student-detail': 'Aluno', workouts: 'Treinos', 'workout-tracking': 'Acompanhamento', finance: 'Financeiro' };
 const endpoints = { overview: '/api/dashboard', students: '/api/students', workouts: '/api/workouts', finance: '/api/finance' };
 
 async function api(path, options = {}) {
@@ -456,7 +528,9 @@ async function navigate(page) {
   render();
   const endpoint = activePage === 'student-detail'
     ? `/api/students/${encodeURIComponent(selectedStudentId)}`
-    : `${endpoints[activePage]}${activePage === 'students' ? `?page=${studentPageNumber}&status=${encodeURIComponent(studentFilter)}` : ''}`;
+    : activePage === 'workout-tracking'
+      ? `/api/workouts/${encodeURIComponent(selectedWorkoutId)}/tracking`
+      : `${endpoints[activePage]}${activePage === 'students' ? `?page=${studentPageNumber}&status=${encodeURIComponent(studentFilter)}` : ''}`;
   try {
     const result = await api(endpoint);
     if (loadId !== pageLoadId) return;
@@ -797,6 +871,47 @@ function bindEvents() {
       showToast(error.message);
     }
   }));
+  app.querySelectorAll('[data-workout-track]').forEach((button) => button.addEventListener('click', () => {
+    selectedWorkoutId = button.dataset.workoutTrack;
+    searchValue = '';
+    navigate('workout-tracking');
+  }));
+  app.querySelectorAll('[data-action="back-to-workouts"]').forEach((button) => button.addEventListener('click', () => navigate('workouts')));
+  app.querySelector('#tracking-day')?.addEventListener('change', (event) => {
+    const exercises = pageData.workout.exercises.filter((exercise) => exercise.dayOfWeek === event.target.value);
+    app.querySelector('#tracking-exercises').innerHTML = workoutTrackingExerciseFields(exercises);
+  });
+  app.querySelector('#tracking-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button[type="submit"]');
+    const error = form.querySelector('.tracking-error');
+    const exercises = [...form.querySelectorAll('[data-tracking-exercise]')].map((exercise) => ({
+      exerciseId: exercise.dataset.exerciseId,
+      sets: [...exercise.querySelectorAll('[data-tracking-set]')].map((set) => ({
+        repetitions: Number(set.querySelector('[name="repetitions"]').value),
+        loadKg: Number(set.querySelector('[name="loadKg"]').value),
+      })),
+    }));
+    button.disabled = true;
+    button.textContent = 'Salvando...';
+    error.textContent = '';
+    void api(`/api/workouts/${encodeURIComponent(selectedWorkoutId)}/sessions`, {
+      method: 'POST',
+      body: JSON.stringify({
+        dayOfWeek: String(new FormData(form).get('dayOfWeek')),
+        performedAt: String(new FormData(form).get('performedAt')),
+        exercises,
+      }),
+    }).then(async () => {
+      await navigate('workout-tracking');
+      showToast('Acompanhamento registrado.');
+    }).catch((saveError) => {
+      error.textContent = saveError.message;
+      button.disabled = false;
+      button.innerHTML = `${icon('check', 16)} Salvar acompanhamento`;
+    });
+  });
   app.querySelectorAll('[data-action="retry"]').forEach((button) => button.addEventListener('click', () => navigate(activePage)));
   app.querySelectorAll('[data-action="sign-out"]').forEach((button) => button.addEventListener('click', async () => {
     const { error } = await supabase.auth.signOut();
@@ -811,6 +926,7 @@ function bindEvents() {
   }));
   document.querySelector('#global-search')?.addEventListener('input', (event) => {
     searchValue = event.target.value;
+    if (activePage === 'workout-tracking') return;
     const cursor = event.target.selectionStart;
     render();
     const search = document.querySelector('#global-search');
