@@ -51,16 +51,15 @@ Paleta extraída dos estilos da aplicação:
 
 | Uso | Cor |
 | --- | --- |
-| Fundo geral | `#f5f7fb` |
-| Azul-marinho da navegação | `#20283e` |
-| Texto principal | `#242a3b` |
-| Azul principal (destaques e ícones) | `#5b70e8` |
-| Azul dos botões principais | `#5d70e4` |
-| Verde de sucesso e recebimentos | `#2daf82` |
-| Superfície dos cartões e modais | `#ffffff` |
-| Bordas e divisórias | `#edf0f5` |
-| Texto secundário | `#8c93a4` |
-| Âmbar para alertas | `#d29638` |
+| Fundo geral (cinza quente) | `#f5f4f1` |
+| Navegação (grafite) | `#33312e` |
+| Texto principal | `#2f2e2b` |
+| Destaques e botões (pedra escura) | `#5c5952` |
+| Superfície de cartões e modais | `#fffefa` |
+| Bordas e divisórias | `#e8e5de` |
+| Texto secundário | `#89867f` |
+| Sucesso (verde sálvia discreto) | `#688270` |
+| Alertas (âmbar suave) | `#9a7a4e` |
 
 As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores destacados), com fontes locais do sistema como alternativa.
 
