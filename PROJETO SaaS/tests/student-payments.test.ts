@@ -11,7 +11,15 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../src/db/scoped-prisma', () => mocks);
 
-const student = { id: 'student-1', name: 'Ana Silva', email: 'ana@example.com', active: true, createdAt: new Date('2026-01-01T00:00:00.000Z') };
+const student = {
+  id: 'student-1',
+  name: 'Ana Silva',
+  email: 'ana@example.com',
+  active: true,
+  lessonDurationMinutes: 60,
+  schedules: [],
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+};
 const db = {
   student: { findFirst: vi.fn() },
   extraPayment: { create: vi.fn(), findMany: vi.fn() },

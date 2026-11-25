@@ -6,6 +6,7 @@ export default defineConfig({
       'tests/auth.test.ts',
       'tests/supabase-rest.test.ts',
       'tests/student-payments.test.ts',
+      'tests/student-schedule.test.ts',
       'tests/dashboard-finance.test.ts',
       'tests/workouts.test.ts',
     ],

@@ -138,7 +138,7 @@ function sidebar() {
   }).join('');
 
   return `<aside class="sidebar" id="sidebar">
-    <a class="brand" href="#" data-page="overview"><span class="brand-mark">${icon('activity', 20)}</span><span>forma<span class="brand-dot">.</span></span></a>
+    <a class="brand" href="#" data-page="overview"><span class="brand-mark">${icon('activity', 20)}</span><span>Ímpetus<span class="brand-dot"> Fit</span></span></a>
     <div class="workspace"><span class="workspace-avatar">${escapeHTML(initials(currentUser?.name))}</span><span class="workspace-copy"><strong>${escapeHTML(currentUser?.name ?? '')}</strong><small>Personal trainer</small></span>${icon('arrowDown', 15)}</div>
     <nav class="navigation" aria-label="Navegação principal">${links}</nav>
     <div class="sidebar-bottom">
@@ -207,6 +207,22 @@ function dashboard(data) {
     ? attention.map((item) => `<div class="attention-item"><span class="attention-symbol ${item.color}">${icon(item.iconName, 18)}</span><div><strong>${escapeHTML(item.title)}</strong><span>${escapeHTML(item.detail)}</span></div><button aria-label="Ver detalhes" class="icon-button" data-page="${item.page}">${icon('arrowRight', 18)}</button></div>`).join('')
     : '<p class="empty-inline">Nenhuma pendência encontrada nos seus dados.</p>';
   const totalReceived = chart.reduce((total, month) => total + month.received, 0);
+  const agendaDays = workoutWeekdays.map((day) => {
+    const appointments = (data.schedule?.appointments ?? []).filter((item) => item.dayOfWeek === day.value);
+    return `<section class="agenda-day">
+      <header><h3>${escapeHTML(day.label)}</h3><span>${appointments.length}</span></header>
+      <div class="agenda-appointments">${appointments.length ? appointments.map((item) => {
+        const endMinute = item.startMinute + item.durationMinutes;
+        const endTime = `${String(Math.floor(endMinute / 60)).padStart(2, '0')}:${String(endMinute % 60).padStart(2, '0')}`;
+        return `<button class="agenda-appointment" data-student-open="${escapeHTML(item.studentId)}">
+          <strong>${escapeHTML(item.student)}</strong><span>${String(Math.floor(item.startMinute / 60)).padStart(2, '0')}:${String(item.startMinute % 60).padStart(2, '0')}–${endTime}</span>
+        </button>`;
+      }).join('') : '<p class="agenda-empty">Sem aulas</p>'}</div>
+    </section>`;
+  }).join('');
+  const unscheduled = (data.schedule?.unscheduledStudents ?? []).map((student) =>
+    `<div class="unscheduled-student">${studentAvatar(student)}<span>${escapeHTML(student.name)}</span><button class="text-button" data-schedule-student="${escapeHTML(student.id)}">Definir horário</button></div>`,
+  ).join('');
 
   return `${pageHeading(`Olá, ${escapeHTML(currentUser.name.split(' ')[0])}! <span class="heading-wave">✦</span>`, 'Aqui está o resumo atualizado do seu negócio.')}
     ${connectionNote()}
@@ -231,6 +247,11 @@ function dashboard(data) {
     <section class="card attention-card">
       <div class="card-heading"><div><h2>Precisam da sua atenção</h2><p>Pendências calculadas a partir dos seus dados</p></div><button class="text-button" data-page="finance">Financeiro ${icon('arrowRight', 15)}</button></div>
       <div class="attention-items">${attentionRows}</div>
+    </section>
+    <section class="card agenda-board-card">
+      <div class="card-heading"><div><h2>Agenda semanal</h2><p>Aulas recorrentes organizadas por dia e horário.</p></div></div>
+      <div class="agenda-board">${agendaDays}</div>
+      ${unscheduled ? `<div class="unscheduled-list"><h3>Alunos sem horário definido</h3>${unscheduled}</div>` : ''}
     </section>`;
 }
 
@@ -287,13 +308,21 @@ function studentDetailPage(data) {
       <td><span class="status-badge ${style}"><i></i>${status}</span></td>
     </tr>`;
   }).join('');
-  const action = `<button class="primary-button" data-action="add-payment">${icon('plus', 17)} Registrar pagamento</button>`;
+  const action = `<div class="detail-actions"><button class="outline-button" data-student-status="${!student.active}">${student.active ? 'Desativar aluno' : 'Reativar aluno'}</button><button class="primary-button" data-action="add-payment">${icon('plus', 17)} Registrar pagamento</button></div>`;
+  const lessonDays = workoutWeekdays
+    .filter((day) => student.schedules.some((schedule) => schedule.dayOfWeek === day.value))
+    .map((day) => day.label)
+    .join(', ');
 
-  return `${pageHeading(escapeHTML(student.name), 'Detalhes do aluno e histórico de pagamentos.', action)}
+  return `${pageHeading(escapeHTML(student.name), 'Detalhes do aluno, agenda e histórico de pagamentos.', action)}
     <button class="text-button student-back" data-action="back-to-students">${icon('arrowLeft', 15)} Voltar para alunos</button>
     <section class="student-profile-grid">
       <article class="card student-profile-card"><span class="student-profile-avatar">${studentAvatar(student)}</span><div><h2>${escapeHTML(student.name)}</h2><p>${escapeHTML(student.email)}</p><span class="status-badge ${student.active ? 'ativo' : 'inativo'}"><i></i>${student.active ? 'Ativo' : 'Inativo'}</span></div></article>
       <article class="metric-card student-total-card"><p class="metric-label">Total recebido</p><strong class="metric-value">${money(totalReceived)}</strong><p class="metric-note">em pagamentos confirmados</p></article>
+    </section>
+    <section class="card student-schedule-card">
+      <div class="card-heading"><div><h2>Horário de aula</h2><p>${student.schedules.length ? `${student.weeklyFrequency} aula(s) por semana` : 'Ainda não há uma agenda definida para este aluno.'}</p></div><button class="outline-button" data-schedule-student="${escapeHTML(student.id)}">${student.schedules.length ? 'Editar agenda' : 'Definir agenda'}</button></div>
+      ${student.schedules.length ? `<p class="student-schedule-summary">${escapeHTML(lessonDays)} · ${escapeHTML(student.schedules[0].startTime)} · ${student.lessonDurationMinutes} minutos</p>` : ''}
     </section>
     <section class="card table-card student-payments-card">
       <div class="table-toolbar"><div><h2>Histórico de pagamentos</h2><p>Pagamentos registrados para este aluno.</p></div></div>
@@ -446,14 +475,14 @@ function render() {
     <main class="main-content"><header class="topbar"><button class="icon-button mobile-menu" aria-label="Abrir menu" data-action="toggle-menu">${icon('menu')}</button>
       <div class="breadcrumbs">Início <span>/</span> <strong>${titles[activePage]}</strong></div>
       <div class="topbar-actions"><label class="search-box">${icon('search', 17)}<input id="global-search" type="search" placeholder="Buscar nesta tela..." aria-label="Buscar nesta tela" value="${escapeHTML(searchValue)}"><kbd>⌘ K</kbd></label><button class="icon-button profile-menu" aria-label="Sair da conta" title="Sair" data-action="sign-out">${icon('ellipsis')}</button></div>
-    </header><div class="page-content">${page}<footer class="footer">Feito para cuidar melhor de quem cuida. <span>Forma <b>·</b> Gestão do Personal</span></footer></div></main><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="modal-root"></div>`;
+    </header><div class="page-content">${page}<footer class="footer">Feito para cuidar melhor de quem cuida. <span>Ímpetus Fit <b>·</b> Gestão do Personal</span></footer></div></main><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="modal-root"></div>`;
   bindEvents();
 }
 
 function renderLogin(message = loginMessage) {
   loginMessage = message;
   app.innerHTML = `<main class="login-page"><section class="login-card">
-    <a class="brand login-brand" href="#"><span class="brand-mark">${icon('activity', 20)}</span><span>forma<span class="brand-dot">.</span></span></a>
+    <a class="brand login-brand" href="#"><span class="brand-mark">${icon('activity', 20)}</span><span>Ímpetus<span class="brand-dot"> Fit</span></span></a>
     <p class="eyebrow">GESTÃO DO PERSONAL</p><h1>Acesse sua conta</h1><p class="login-subtitle">Entre para consultar os dados do seu negócio.</p>
     ${loginMessage ? `<div class="login-error" role="alert">${escapeHTML(loginMessage)}</div>` : ''}
     <form id="login-form"><label>E-mail<input name="email" type="email" autocomplete="username" required placeholder="voce@email.com"></label><label>Senha<input name="password" type="password" autocomplete="current-password" required placeholder="Sua senha"></label><button class="primary-button login-submit" type="submit">Entrar</button></form>
@@ -512,9 +541,42 @@ function addStudentModal() {
   const root = document.querySelector('#modal-root');
   root.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-header"><div><p class="eyebrow">SUA EQUIPE</p><h2 id="modal-title">Adicionar aluno</h2><p>Preencha os dados para incluir um novo aluno.</p></div><button class="icon-button" aria-label="Fechar" data-action="close-modal">${icon('close')}</button></div>
-    <form id="student-form"><label>Nome completo<input name="name" required maxlength="120" placeholder="Ex.: Ana Silva"></label><label>E-mail<input name="email" type="email" required maxlength="254" placeholder="ana@email.com"></label><p class="modal-error" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" data-action="close-modal">Cancelar</button><button type="submit" class="primary-button">${icon('plus', 16)} Salvar aluno</button></div><p class="modal-disclaimer">O cadastro será salvo no banco de dados.</p></form>
+    <form id="student-form">
+      <label>Nome completo<input name="name" required maxlength="120" placeholder="Ex.: Ana Silva"></label>
+      <label>E-mail<input name="email" type="email" required maxlength="254" placeholder="ana@email.com"></label>
+      ${scheduleFieldsMarkup()}
+      <p class="modal-error" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" data-action="close-modal">Cancelar</button><button type="submit" class="primary-button">${icon('plus', 16)} Salvar aluno</button></div><p class="modal-disclaimer">A frequência semanal é calculada pelos dias selecionados.</p>
+    </form>
   </section></div>`;
   root.querySelector('input[name="name"]').focus();
+}
+
+function scheduleFieldsMarkup(student = null) {
+  const selected = new Set((student?.schedules ?? []).map((schedule) => schedule.dayOfWeek));
+  const startTime = student?.schedules?.[0]?.startTime ?? '08:00';
+  const days = workoutWeekdays.map((day) => `<label class="weekday-option">
+    <input type="checkbox" name="days" value="${day.value}" ${selected.has(day.value) ? 'checked' : ''}>
+    <span>${day.label}</span>
+  </label>`).join('');
+  return `<div class="schedule-fields">
+    <label>Duração da aula<select name="lessonDurationMinutes" required>
+      ${[30, 45, 60, 75, 90, 105, 120, 150, 180, 240].map((minutes) => `<option value="${minutes}" ${minutes === (student?.lessonDurationMinutes ?? 60) ? 'selected' : ''}>${minutes} minutos</option>`).join('')}
+    </select></label>
+    <label>Horário de início<input name="startTime" type="time" value="${escapeHTML(startTime)}" required></label>
+    <fieldset class="weekday-picker"><legend>Dias da semana</legend><div>${days}</div></fieldset>
+  </div>`;
+}
+
+function scheduleEditorModal(student) {
+  const root = document.querySelector('#modal-root');
+  root.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header"><div><p class="eyebrow">AGENDA DO ALUNO</p><h2 id="modal-title">${student.schedules?.length ? 'Editar horário de aula' : 'Definir horário de aula'}</h2><p>Configure os dias recorrentes para ${escapeHTML(student.name)}.</p></div><button class="icon-button" aria-label="Fechar" data-action="close-modal">${icon('close')}</button></div>
+    <form id="schedule-form" data-student-id="${escapeHTML(student.id)}">${scheduleFieldsMarkup(student)}
+      <p class="modal-error" role="alert"></p><div class="modal-actions"><button type="button" class="outline-button" data-action="close-modal">Cancelar</button><button type="submit" class="primary-button">${icon('check', 16)} Salvar agenda</button></div>
+      <p class="modal-disclaimer">Horários sobrepostos com outros alunos ativos serão bloqueados.</p>
+    </form>
+  </section></div>`;
+  root.querySelector('input[name="startTime"]').focus();
 }
 
 function addPaymentModal() {
@@ -667,6 +729,28 @@ function bindEvents() {
   }));
   app.querySelectorAll('[data-action="back-to-students"]').forEach((button) => button.addEventListener('click', () => navigate('students')));
   app.querySelectorAll('[data-action="add-payment"]').forEach((button) => button.addEventListener('click', addPaymentModal));
+  app.querySelectorAll('[data-schedule-student]').forEach((button) => button.addEventListener('click', () => {
+    const id = button.dataset.scheduleStudent;
+    const student = pageData?.student?.id === id
+      ? pageData.student
+      : (pageData?.schedule?.unscheduledStudents ?? []).find((item) => item.id === id);
+    if (student) scheduleEditorModal(student);
+  }));
+  app.querySelectorAll('[data-student-status]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
+    const active = button.dataset.studentStatus === 'true';
+    try {
+      await api(`/api/students/${encodeURIComponent(selectedStudentId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ active }),
+      });
+      await navigate('student-detail');
+      showToast(active ? 'Aluno reativado.' : 'Aluno desativado; histórico preservado.');
+    } catch (error) {
+      button.disabled = false;
+      showToast(error.message);
+    }
+  }));
   app.querySelectorAll('[data-workout-toggle]').forEach((button) => button.addEventListener('click', async () => {
     button.disabled = true;
     const active = button.dataset.active === 'true';
@@ -749,6 +833,33 @@ function bindEvents() {
     const data = new FormData(form);
     const button = form.querySelector('button[type="submit"]');
     const error = form.querySelector('.modal-error');
+    if (form.id === 'schedule-form') {
+      const days = data.getAll('days').map(String);
+      if (!days.length) {
+        error.textContent = 'Selecione pelo menos um dia da semana.';
+        return;
+      }
+      button.disabled = true;
+      button.textContent = 'Salvando...';
+      error.textContent = '';
+      void api(`/api/students/${encodeURIComponent(form.dataset.studentId)}/schedule`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          lessonDurationMinutes: Number(data.get('lessonDurationMinutes')),
+          startTime: String(data.get('startTime')),
+          days,
+        }),
+      }).then(async () => {
+        document.querySelector('#modal-root').innerHTML = '';
+        await navigate(activePage);
+        showToast('Agenda do aluno atualizada.');
+      }).catch((saveError) => {
+        error.textContent = saveError.message;
+        button.disabled = false;
+        button.innerHTML = `${icon('check', 16)} Salvar agenda`;
+      });
+      return;
+    }
     if (form.id === 'workout-form') {
       const days = [...form.querySelectorAll('[data-workout-day]')].map((group) => ({
         dayOfWeek: group.querySelector('[name="dayOfWeek"]').value,
@@ -810,6 +921,9 @@ function bindEvents() {
       body: JSON.stringify({
         name: String(data.get('name')).trim(),
         email: String(data.get('email')).trim(),
+        lessonDurationMinutes: Number(data.get('lessonDurationMinutes')),
+        startTime: String(data.get('startTime')),
+        days: data.getAll('days').map(String),
       }),
     }).then(() => {
       document.querySelector('#modal-root').innerHTML = '';

@@ -18,6 +18,7 @@ const byTenant: TenantRule = {
 const TENANT_RULES: Record<string, TenantRule> = {
   Personal: { where: (p) => ({ id: p }) },
   Student: byTenant,
+  StudentSchedule: byTenant,
   Lead: byTenant,
   Contract: byTenant,
   PaymentParcel: byTenant,
@@ -32,6 +33,7 @@ const READ_OPS = [
 ];
 const WHERE_OPS = ['update', 'updateMany', 'delete', 'deleteMany', 'upsert'];
 const CREATE_OPS = ['create', 'createMany', 'upsert'];
+const UNIQUE_WHERE_OPS = ['findUnique', 'findUniqueOrThrow', 'update', 'delete', 'upsert'];
 
 export function getScopedPrisma(personalId: string) {
   if (!personalId || typeof personalId !== 'string') {
@@ -48,9 +50,14 @@ export function getScopedPrisma(personalId: string) {
           const a: Record<string, any> = { ...(args ?? {}) };
 
           if (READ_OPS.includes(operation) || WHERE_OPS.includes(operation)) {
-            a.where = a.where
-              ? { AND: [a.where, rule.where(personalId)] }
-              : rule.where(personalId);
+            const tenantWhere = rule.where(personalId);
+            if (UNIQUE_WHERE_OPS.includes(operation)) {
+              a.where = { ...a.where, ...tenantWhere };
+            } else if (a.where) {
+              a.where = { AND: [a.where, tenantWhere] };
+            } else {
+              a.where = tenantWhere;
+            }
           }
 
           if (CREATE_OPS.includes(operation)) {

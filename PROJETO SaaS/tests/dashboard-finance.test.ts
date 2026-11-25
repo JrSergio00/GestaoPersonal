@@ -17,7 +17,7 @@ const confirmedPayment = {
 };
 
 const db = {
-  student: { count: vi.fn().mockResolvedValue(0) },
+  student: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
   workout: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
   contract: { count: vi.fn().mockResolvedValue(0), findMany: vi.fn().mockResolvedValue([]) },
   exam: { count: vi.fn().mockResolvedValue(0) },
@@ -66,5 +66,64 @@ describe('receita recebida no dashboard', () => {
       key: '2026-11',
       received: 275.5,
     });
+  });
+
+  it('organiza a agenda por dia e horário e lista alunos sem horário', async () => {
+    db.student.findMany.mockResolvedValueOnce([
+      {
+        id: 'student-a',
+        name: 'Ana Silva',
+        lessonDurationMinutes: 60,
+        schedules: [
+          { dayOfWeek: 'MONDAY', startMinute: 480 },
+          { dayOfWeek: 'WEDNESDAY', startMinute: 480 },
+        ],
+      },
+      {
+        id: 'student-b',
+        name: 'Bruna Costa',
+        lessonDurationMinutes: 60,
+        schedules: [],
+      },
+      {
+        id: 'student-c',
+        name: 'Carla Lima',
+        lessonDurationMinutes: 90,
+        schedules: [{ dayOfWeek: 'MONDAY', startMinute: 540 }],
+      },
+    ]);
+
+    const response = await request(createApp()).get('/api/dashboard');
+
+    expect(response.status).toBe(200);
+    expect(response.body.schedule.appointments).toEqual([
+      {
+        studentId: 'student-a',
+        student: 'Ana Silva',
+        dayOfWeek: 'MONDAY',
+        startMinute: 480,
+        durationMinutes: 60,
+        weeklyFrequency: 2,
+      },
+      {
+        studentId: 'student-c',
+        student: 'Carla Lima',
+        dayOfWeek: 'MONDAY',
+        startMinute: 540,
+        durationMinutes: 90,
+        weeklyFrequency: 1,
+      },
+      {
+        studentId: 'student-a',
+        student: 'Ana Silva',
+        dayOfWeek: 'WEDNESDAY',
+        startMinute: 480,
+        durationMinutes: 60,
+        weeklyFrequency: 2,
+      },
+    ]);
+    expect(response.body.schedule.unscheduledStudents).toEqual([
+      { id: 'student-b', name: 'Bruna Costa' },
+    ]);
   });
 });

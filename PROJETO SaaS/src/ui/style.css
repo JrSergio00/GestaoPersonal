@@ -378,6 +378,38 @@ tbody tr:hover { background: #fbfcfe; }
 .login-submit { width: 100%; min-height: 40px; margin-top: 3px; }
 .login-submit:disabled { opacity: .7; transform: none; }
 .login-help { margin: 17px 0 0; color: #9298a7; font-size: 9px; line-height: 1.65; }
+
+.agenda-board-card, .student-schedule-card { margin-top: 17px; }
+.detail-actions { display: flex; align-items: center; gap: 8px; }
+.agenda-board { display: grid; grid-template-columns: repeat(7, minmax(130px, 1fr)); gap: 9px; margin-top: 16px; overflow-x: auto; padding-bottom: 5px; }
+.agenda-day { min-height: 145px; overflow: hidden; background: #f8f9fc; border: 1px solid #edf0f5; border-radius: 9px; }
+.agenda-day > header { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 10px 9px; border-bottom: 1px solid #edf0f5; }
+.agenda-day h3, .unscheduled-list h3 { margin: 0; color: #555d70; font-size: 9px; font-weight: 700; }
+.agenda-day > header span { display: grid; width: 18px; height: 18px; place-items: center; color: #6678d9; background: #edf0ff; border-radius: 6px; font-size: 8px; }
+.agenda-appointments { display: grid; align-content: start; gap: 6px; padding: 7px; }
+.agenda-appointment { display: grid; gap: 4px; padding: 8px; color: #4a5266; background: #fff; border: 1px solid #e8ebf3; border-left: 3px solid #7182e8; border-radius: 6px; text-align: left; }
+.agenda-appointment:hover { background: #f7f8ff; border-color: #dce1fa; }
+.agenda-appointment strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.agenda-appointment span { color: #8d94a4; font-size: 8px; }
+.agenda-empty { margin: 5px 0; color: #a4a9b5; font-size: 8px; text-align: center; }
+.unscheduled-list { display: grid; gap: 8px; margin-top: 15px; padding-top: 13px; border-top: 1px solid #eff1f5; }
+.unscheduled-student { display: flex; align-items: center; gap: 8px; color: #596174; font-size: 9px; }
+.unscheduled-student > span:nth-child(2) { flex: 1; }
+.unscheduled-student .text-button { padding: 4px 0; }
+.student-schedule-summary { margin: 14px 0 2px; color: #555d70; font-size: 11px; }
+.schedule-fields { display: grid; gap: 13px; }
+.schedule-fields > label { display: grid; gap: 6px; color: #555c6d; font-size: 10px; font-weight: 600; }
+#student-form .schedule-fields input, #schedule-form .schedule-fields input,
+#student-form .schedule-fields select, #schedule-form .schedule-fields select { width: 100%; height: 38px; padding: 0 10px; color: #343a4b; background: #fff; border: 1px solid #e7eaf0; border-radius: 7px; font-size: 10px; }
+.weekday-picker { min-width: 0; margin: 0; padding: 0; border: 0; }
+.weekday-picker legend { margin-bottom: 7px; color: #555c6d; font-size: 10px; font-weight: 600; }
+.weekday-picker > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.weekday-option { display: flex !important; min-height: 34px; align-items: center; gap: 7px !important; padding: 0 8px; color: #697184 !important; background: #f8f9fc; border: 1px solid #edf0f5; border-radius: 7px; font-size: 9px !important; font-weight: 500 !important; }
+.weekday-option input { width: 14px !important; height: 14px !important; margin: 0; accent-color: #6478e7; }
+@media (max-width: 790px) {
+  .agenda-board { grid-template-columns: repeat(7, minmax(145px, 1fr)); }
+  .student-schedule-card .card-heading { align-items: center; }
+}
 .login-footer { margin: 17px 0 0; color: #9ba1ae; font-size: 9px; }
 .login-error { margin: 13px 0 0; padding: 10px 11px; color: #9e4c45; background: #fff2ef; border: 1px solid #f8e2dd; border-radius: 7px; font-size: 10px; line-height: 1.5; }
 .modal-error { min-height: 0; margin: 0; color: #b94d42; font-size: 9px; }

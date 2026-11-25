@@ -9,11 +9,6 @@ const REVIEW_AFTER_DAYS = 30;
 const UPCOMING_CONTRACT_DAYS = 30;
 const PAGE_SIZE = 50;
 
-const createStudentSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  email: z.string().trim().email().max(254),
-});
-
 const createStudentPaymentSchema = z.object({
   amount: z.number().finite().positive().max(999999999.99)
     .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8),
@@ -25,6 +20,77 @@ const createStudentPaymentSchema = z.object({
   }),
 });
 
+const WEEKDAY_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'] as const;
+const weekdaySchema = z.enum(WEEKDAY_ORDER);
+const WEEKDAY_LABELS: Record<z.infer<typeof weekdaySchema>, string> = {
+  MONDAY: 'segunda-feira',
+  TUESDAY: 'terça-feira',
+  WEDNESDAY: 'quarta-feira',
+  THURSDAY: 'quinta-feira',
+  FRIDAY: 'sexta-feira',
+  SATURDAY: 'sábado',
+  SUNDAY: 'domingo',
+};
+const studentScheduleFields = {
+  lessonDurationMinutes: z.number().int().min(15).max(240).refine((value) => value % 15 === 0),
+  startTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+  days: z.array(weekdaySchema).min(1).max(7)
+    .refine((days) => new Set(days).size === days.length, 'Não repita dias da semana.'),
+};
+
+function scheduleEndsBeforeMidnight(schedule: { startTime: string; lessonDurationMinutes: number }) {
+  const [hours, minutes] = schedule.startTime.split(':').map(Number);
+  return hours * 60 + minutes + schedule.lessonDurationMinutes <= 1440;
+}
+
+const studentScheduleSchema = z.object(studentScheduleFields)
+  .refine(scheduleEndsBeforeMidnight, 'A aula deve terminar até a meia-noite.');
+const createStudentSchema = z.object({
+  ...studentScheduleFields,
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().email().max(254),
+}).refine(scheduleEndsBeforeMidnight, 'A aula deve terminar até a meia-noite.');
+const setStudentStatusSchema = z.object({ active: z.boolean() });
+
+function startTimeToMinute(startTime: string) {
+  const [hours, minutes] = startTime.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function minuteToStartTime(startMinute: number) {
+  return `${String(Math.floor(startMinute / 60)).padStart(2, '0')}:${String(startMinute % 60).padStart(2, '0')}`;
+}
+
+function findScheduleConflict(
+  existing: Array<{
+    dayOfWeek: z.infer<typeof weekdaySchema>;
+    startMinute: number;
+    student: { name: string; lessonDurationMinutes: number };
+  }>,
+  proposed: Array<{ dayOfWeek: z.infer<typeof weekdaySchema>; startMinute: number }>,
+  durationMinutes: number,
+) {
+  for (const schedule of proposed) {
+    const conflict = existing.find((appointment) =>
+      appointment.dayOfWeek === schedule.dayOfWeek
+      && schedule.startMinute < appointment.startMinute + appointment.student.lessonDurationMinutes
+      && appointment.startMinute < schedule.startMinute + durationMinutes,
+    );
+    if (conflict) {
+      return {
+        dayOfWeek: schedule.dayOfWeek,
+        studentName: conflict.student.name,
+        startMinute: conflict.startMinute,
+      };
+    }
+  }
+  return null;
+}
+
+function scheduleConflictMessage(conflict: NonNullable<Awaited<ReturnType<typeof findScheduleConflict>>>) {
+  return `${conflict.studentName} já tem aula ${WEEKDAY_LABELS[conflict.dayOfWeek]} às ${minuteToStartTime(conflict.startMinute)}. Escolha outro horário.`;
+}
+
 const workoutExerciseSchema = z.object({
   name: z.string().trim().min(1).max(120),
   sets: z.number().int().min(1).max(100),
@@ -33,7 +99,7 @@ const workoutExerciseSchema = z.object({
 });
 
 const workoutDaySchema = z.object({
-  dayOfWeek: z.enum(['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY']),
+  dayOfWeek: weekdaySchema,
   exercises: z.array(workoutExerciseSchema).min(1).max(50),
 });
 
@@ -274,6 +340,7 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         upcomingContracts,
         pendingExams,
         finance,
+        scheduleStudents,
       ] = await Promise.all([
         db.student.count({ where: { anonymizedAt: null } }),
         db.student.count({ where: { active: true, anonymizedAt: null } }),
@@ -318,7 +385,33 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         }),
         db.exam.count({ where: { status: ExamStatus.PENDING_REVIEW } }),
         financePromise,
+        db.student.findMany({
+          where: { active: true, anonymizedAt: null },
+          orderBy: { name: 'asc' },
+          select: {
+            id: true,
+            name: true,
+            lessonDurationMinutes: true,
+            schedules: { select: { dayOfWeek: true, startMinute: true } },
+          },
+        }),
       ]);
+
+      const appointments = scheduleStudents.flatMap((student) => student.schedules.map((schedule) => ({
+        studentId: student.id,
+        student: student.name,
+        dayOfWeek: schedule.dayOfWeek,
+        startMinute: schedule.startMinute,
+        durationMinutes: student.lessonDurationMinutes,
+        weeklyFrequency: student.schedules.length,
+      }))).sort((left, right) =>
+        WEEKDAY_ORDER.indexOf(left.dayOfWeek) - WEEKDAY_ORDER.indexOf(right.dayOfWeek)
+        || left.startMinute - right.startMinute
+        || left.student.localeCompare(right.student, 'pt-BR'),
+      );
+      const unscheduledStudents = scheduleStudents
+        .filter((student) => student.schedules.length === 0)
+        .map(({ id, name }) => ({ id, name }));
 
       await logScopedAccess({
         userId: current.userId,
@@ -351,6 +444,7 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         },
         pendingExams,
         finance,
+        schedule: { appointments, unscheduledStudents },
       });
     } catch (error) {
       next(error);
@@ -435,13 +529,50 @@ export function createApiRouter(requirePersonal: RequestHandler) {
       const current = auth(req);
       const parsed = createStudentSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ error: 'Informe um nome e um e-mail válido.' });
+        res.status(400).json({ error: 'Informe nome, e-mail e uma agenda válida, com ao menos um dia.' });
         return;
       }
       const db = getScopedPrisma(current.personalId);
-      const student = await db.student.create({
-        data: { ...parsed.data, personalId: current.personalId },
+      const startMinute = startTimeToMinute(parsed.data.startTime);
+      const proposed = parsed.data.days.map((dayOfWeek) => ({ dayOfWeek, startMinute }));
+      const result = await db.$transaction(async (tx) => {
+        const existing = await tx.studentSchedule.findMany({
+          where: {
+            dayOfWeek: { in: parsed.data.days },
+            student: { is: { active: true, anonymizedAt: null } },
+          },
+          select: {
+            dayOfWeek: true,
+            startMinute: true,
+            student: { select: { name: true, lessonDurationMinutes: true } },
+          },
+        });
+        const conflict = findScheduleConflict(existing, proposed, parsed.data.lessonDurationMinutes);
+        if (conflict) return { conflict, student: null };
+
+        const student = await tx.student.create({
+          data: {
+            personalId: current.personalId,
+            name: parsed.data.name,
+            email: parsed.data.email,
+            lessonDurationMinutes: parsed.data.lessonDurationMinutes,
+          },
+        });
+        await tx.studentSchedule.createMany({
+          data: parsed.data.days.map((dayOfWeek) => ({
+            personalId: current.personalId,
+            studentId: student.id,
+            dayOfWeek,
+            startMinute,
+          })),
+        });
+        return { conflict: null, student };
       });
+      if (result.conflict) {
+        res.status(409).json({ error: scheduleConflictMessage(result.conflict) });
+        return;
+      }
+      const student = result.student;
       await logScopedAccess({
         userId: current.userId,
         personalId: current.personalId,
@@ -455,6 +586,9 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         name: student.name,
         email: student.email,
         active: student.active,
+        lessonDurationMinutes: student.lessonDurationMinutes,
+        weeklyFrequency: parsed.data.days.length,
+        schedules: parsed.data.days.map((dayOfWeek) => ({ dayOfWeek, startTime: parsed.data.startTime })),
         createdAt: student.createdAt.toISOString(),
         plan: null,
       });
@@ -516,7 +650,15 @@ export function createApiRouter(requirePersonal: RequestHandler) {
       const db = getScopedPrisma(current.personalId);
       const student = await db.student.findFirst({
         where: { id: studentId, anonymizedAt: null },
-        select: { id: true, name: true, email: true, active: true, createdAt: true },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          active: true,
+          createdAt: true,
+          lessonDurationMinutes: true,
+          schedules: { select: { dayOfWeek: true, startMinute: true }, orderBy: { dayOfWeek: 'asc' } },
+        },
       });
       if (!student) {
         res.status(404).json({ error: 'Aluno não encontrado.' });
@@ -547,6 +689,11 @@ export function createApiRouter(requirePersonal: RequestHandler) {
         student: {
           ...student,
           createdAt: student.createdAt.toISOString(),
+          schedules: student.schedules.map((schedule) => ({
+            dayOfWeek: schedule.dayOfWeek,
+            startTime: minuteToStartTime(schedule.startMinute),
+          })),
+          weeklyFrequency: student.schedules.length,
         },
         payments: payments.map((payment) => ({
           id: payment.id,
@@ -556,6 +703,165 @@ export function createApiRouter(requirePersonal: RequestHandler) {
           paidAt: (payment.confirmedAt ?? payment.dueDate ?? payment.createdAt).toISOString(),
         })),
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/students/:studentId/schedule', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const studentId = req.params.studentId;
+      if (typeof studentId !== 'string') {
+        res.status(400).json({ error: 'Identificador de aluno inválido.' });
+        return;
+      }
+      const parsed = studentScheduleSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Informe duração, horário e ao menos um dia válido para a aula.' });
+        return;
+      }
+
+      const db = getScopedPrisma(current.personalId);
+      const result = await db.$transaction(async (tx) => {
+        const student = await tx.student.findFirst({
+          where: { id: studentId, anonymizedAt: null },
+          select: { id: true },
+        });
+        if (!student) return { student: null, conflict: null };
+        const startMinute = startTimeToMinute(parsed.data.startTime);
+        const proposed = parsed.data.days.map((dayOfWeek) => ({ dayOfWeek, startMinute }));
+        const existing = await tx.studentSchedule.findMany({
+          where: {
+            dayOfWeek: { in: parsed.data.days },
+            student: { is: { active: true, anonymizedAt: null } },
+            studentId: { not: student.id },
+          },
+          select: {
+            dayOfWeek: true,
+            startMinute: true,
+            student: { select: { name: true, lessonDurationMinutes: true } },
+          },
+        });
+        const conflict = findScheduleConflict(existing, proposed, parsed.data.lessonDurationMinutes);
+        if (conflict) return { student: null, conflict };
+
+        await tx.student.update({
+          where: { id: student.id },
+          data: { lessonDurationMinutes: parsed.data.lessonDurationMinutes },
+        });
+        await tx.studentSchedule.deleteMany({ where: { studentId: student.id } });
+        await tx.studentSchedule.createMany({
+          data: parsed.data.days.map((dayOfWeek) => ({
+            personalId: current.personalId,
+            studentId: student.id,
+            dayOfWeek,
+            startMinute,
+          })),
+        });
+        return { student, conflict: null };
+      });
+
+      if (result.conflict) {
+        res.status(409).json({ error: scheduleConflictMessage(result.conflict) });
+        return;
+      }
+      if (!result.student) {
+        res.status(404).json({ error: 'Aluno não encontrado.' });
+        return;
+      }
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'WRITE',
+        resource: 'student.schedule',
+        resourceId: studentId,
+        ip: req.ip,
+      });
+      res.json({
+        id: studentId,
+        lessonDurationMinutes: parsed.data.lessonDurationMinutes,
+        weeklyFrequency: parsed.data.days.length,
+        schedules: parsed.data.days.map((dayOfWeek) => ({
+          dayOfWeek,
+          startTime: parsed.data.startTime,
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/students/:studentId', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const current = auth(req);
+      const studentId = req.params.studentId;
+      if (typeof studentId !== 'string') {
+        res.status(400).json({ error: 'Identificador de aluno inválido.' });
+        return;
+      }
+      const parsed = setStudentStatusSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Informe se o aluno deve ficar ativo ou inativo.' });
+        return;
+      }
+      const db = getScopedPrisma(current.personalId);
+      const result = await db.$transaction(async (tx) => {
+        const student = await tx.student.findFirst({
+          where: { id: studentId, anonymizedAt: null },
+          select: {
+            id: true,
+            schedules: { select: { dayOfWeek: true, startMinute: true } },
+            lessonDurationMinutes: true,
+          },
+        });
+        if (!student) return { student: null, conflict: null };
+        if (parsed.data.active) {
+          const existing = await tx.studentSchedule.findMany({
+            where: {
+              dayOfWeek: { in: student.schedules.map((schedule) => schedule.dayOfWeek) },
+              student: { is: { active: true, anonymizedAt: null } },
+              studentId: { not: student.id },
+            },
+            select: {
+              dayOfWeek: true,
+              startMinute: true,
+              student: { select: { name: true, lessonDurationMinutes: true } },
+            },
+          });
+          const conflict = findScheduleConflict(existing, student.schedules, student.lessonDurationMinutes);
+          if (conflict) return { student: null, conflict };
+        }
+        const updated = await tx.student.update({
+          where: { id: student.id },
+          data: { active: parsed.data.active },
+          select: { id: true, active: true },
+        });
+        if (!parsed.data.active) {
+          await tx.workout.updateMany({
+            where: { personalId: current.personalId, studentId: student.id, active: true },
+            data: { active: false },
+          });
+        }
+        return { student: updated, conflict: null };
+      });
+      if (result.conflict) {
+        res.status(409).json({ error: scheduleConflictMessage(result.conflict) });
+        return;
+      }
+      if (!result.student) {
+        res.status(404).json({ error: 'Aluno não encontrado.' });
+        return;
+      }
+      await logScopedAccess({
+        userId: current.userId,
+        personalId: current.personalId,
+        action: 'WRITE',
+        resource: 'student.status',
+        resourceId: studentId,
+        ip: req.ip,
+      });
+      res.json(result.student);
     } catch (error) {
       next(error);
     }

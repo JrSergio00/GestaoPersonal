@@ -32,7 +32,7 @@ enum ContractStatus {
   PENDING_SIGNATURE
   SIGNED
   CANCELLED // cancelamento antecipado
-  EXPIRED   // fim do ciclo sem cancelamento (não-renovação quando não há novo contrato)
+  EXPIRED // fim do ciclo sem cancelamento (não-renovação quando não há novo contrato)
 }
 
 enum CycleDuration {
@@ -84,38 +84,38 @@ enum Weekday {
 // ---------- Autenticação, LGPD e auditoria ----------
 
 model User {
-  id           String       @id @default(uuid())
-  email        String       @unique
-  name         String
-  role         Role
-  provider     AuthProvider
-  providerSub  String?      @unique // identificador do Gov.br / OAuth
-  supabaseUserId String?    @unique
-  passwordHash String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id             String       @id @default(uuid())
+  email          String       @unique
+  name           String
+  role           Role
+  provider       AuthProvider
+  providerSub    String?      @unique // identificador do Gov.br / OAuth
+  supabaseUserId String?      @unique
+  passwordHash   String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
-  personal     Personal?
-  student      Student?
-  consents     ConsentGrant[]
-  accessLogs   AccessLog[]
+  personal   Personal?
+  student    Student?
+  consents   ConsentGrant[]
+  accessLogs AccessLog[]
 
   @@map("users")
 }
 
 // Append-only: UPDATE e DELETE bloqueados por trigger (ver migration manual)
 model AccessLog {
-  id          String   @id @default(uuid())
-  userId      String?
-  personalId  String?  // tenant de contexto, quando houver
-  action      String   // ex.: READ, WRITE, EXPORT
-  resource    String   // ex.: exam, student, dashboard.executive
-  resourceId  String?
-  purpose     String?  // finalidade declarada (PURPOSE_SCOPES)
-  ip          String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String?
+  personalId String? // tenant de contexto, quando houver
+  action     String // ex.: READ, WRITE, EXPORT
+  resource   String // ex.: exam, student, dashboard.executive
+  resourceId String?
+  purpose    String? // finalidade declarada (PURPOSE_SCOPES)
+  ip         String?
+  createdAt  DateTime @default(now())
 
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([personalId, createdAt])
   @@index([userId, createdAt])
@@ -124,14 +124,14 @@ model AccessLog {
 
 // Consentimento versionado por finalidade
 model ConsentGrant {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   userId        String
   scopes        String[] // PURPOSE_SCOPES aceitos
   policyVersion String
-  grantedAt     DateTime @default(now())
+  grantedAt     DateTime  @default(now())
   revokedAt     DateTime?
 
-  user          User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([userId, revokedAt])
   @@map("consent_grants")
@@ -146,44 +146,63 @@ model Personal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user           User            @relation(fields: [userId], references: [id], onDelete: Restrict)
-  students       Student[]
-  leads          Lead[]
-  contracts      Contract[]
-  paymentParcels PaymentParcel[]
-  extraPayments  ExtraPayment[]
-  workouts       Workout[]
-  exercises      WorkoutExercise[]
-  exams          Exam[]
+  user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  students         Student[]
+  studentSchedules StudentSchedule[]
+  leads            Lead[]
+  contracts        Contract[]
+  paymentParcels   PaymentParcel[]
+  extraPayments    ExtraPayment[]
+  workouts         Workout[]
+  exercises        WorkoutExercise[]
+  exams            Exam[]
 
   @@map("personals")
 }
 
 model Student {
-  id          String    @id @default(uuid())
-  personalId  String
-  userId      String?   @unique
-  name        String
-  email       String
-  cpfEncrypted String?  // payload AES-256 (versão:iv:tag:cifra), base64
-  cpfHash     String?   // HMAC do CPF para deduplicação sem expor o valor
-  active      Boolean   @default(true)
-  anonymizedAt DateTime? // LGPD: cadastro anonimizado, histórico financeiro retido
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                    String    @id @default(uuid())
+  personalId            String
+  userId                String?   @unique
+  name                  String
+  email                 String
+  cpfEncrypted          String? // payload AES-256 (versão:iv:tag:cifra), base64
+  cpfHash               String? // HMAC do CPF para deduplicação sem expor o valor
+  active                Boolean   @default(true)
+  lessonDurationMinutes Int       @default(60)
+  anonymizedAt          DateTime? // LGPD: cadastro anonimizado, histórico financeiro retido
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  personal    Personal  @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  contracts   Contract[]
-  workouts    Workout[]
-  exams       Exam[]
-  extraPayments ExtraPayment[]
-  convertedLeads Lead[] @relation("LeadConversion")
+  personal       Personal          @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  user           User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  contracts      Contract[]
+  workouts       Workout[]
+  exams          Exam[]
+  extraPayments  ExtraPayment[]
+  schedules      StudentSchedule[]
+  convertedLeads Lead[]            @relation("LeadConversion")
 
   @@unique([id, personalId])
   @@unique([personalId, cpfHash])
   @@index([personalId, active])
   @@map("students")
+}
+
+model StudentSchedule {
+  id          String   @id @default(uuid())
+  personalId  String
+  studentId   String
+  dayOfWeek   Weekday
+  startMinute Int
+  createdAt   DateTime @default(now())
+
+  personal Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  student  Student  @relation(fields: [studentId, personalId], references: [id, personalId], onDelete: Restrict)
+
+  @@unique([personalId, studentId, dayOfWeek])
+  @@index([personalId, dayOfWeek, startMinute])
+  @@map("student_schedules")
 }
 
 model Lead {
@@ -198,8 +217,8 @@ model Lead {
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
 
-  personal           Personal   @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  convertedStudent   Student?   @relation("LeadConversion", fields: [convertedStudentId], references: [id], onDelete: Restrict)
+  personal         Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  convertedStudent Student? @relation("LeadConversion", fields: [convertedStudentId], references: [id], onDelete: Restrict)
 
   @@unique([id, personalId])
   @@index([personalId, status])
@@ -222,9 +241,9 @@ model Contract {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
-  personal      Personal       @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  student       Student        @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  parcels       PaymentParcel[]
+  personal Personal        @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  student  Student         @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  parcels  PaymentParcel[]
 
   @@unique([id, personalId])
   @@index([personalId, status, endDate])
@@ -244,8 +263,8 @@ model PaymentParcel {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  personal     Personal     @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  contract     Contract     @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  personal Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
 
   @@unique([id, personalId])
   @@index([personalId, status, dueDate])
@@ -255,21 +274,21 @@ model PaymentParcel {
 
 // Receita avulsa: fora do MRR
 model ExtraPayment {
-  id           String       @id @default(uuid())
-  personalId   String
-  studentId    String?
-  description  String?
-  amount       Decimal
-  dueDate      DateTime?
-  status       ParcelStatus @default(PENDING)
+  id            String        @id @default(uuid())
+  personalId    String
+  studentId     String?
+  description   String?
+  amount        Decimal
+  dueDate       DateTime?
+  status        ParcelStatus  @default(PENDING)
   paymentMethod PaymentMethod @default(OTHER)
-  pixCopyPaste String?
-  confirmedAt  DateTime?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  pixCopyPaste  String?
+  confirmedAt   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  personal     Personal     @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  student      Student?     @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  personal Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  student  Student? @relation(fields: [studentId], references: [id], onDelete: Restrict)
 
   @@unique([id, personalId])
   @@index([personalId, status, confirmedAt])
@@ -286,9 +305,9 @@ model Workout {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  personal    Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  student     Student  @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  exercises   WorkoutExercise[]
+  personal  Personal          @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  student   Student           @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  exercises WorkoutExercise[]
 
   @@unique([id, personalId])
   @@index([personalId, studentId, updatedAt])
@@ -296,20 +315,20 @@ model Workout {
 }
 
 model WorkoutExercise {
-  id           String   @id @default(uuid())
-  personalId   String
-  workoutId    String
-  dayOfWeek    Weekday?
-  name         String
-  sets         Int
-  repetitions  Int
-  restSeconds  Int
-  position     Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id          String   @id @default(uuid())
+  personalId  String
+  workoutId   String
+  dayOfWeek   Weekday?
+  name        String
+  sets        Int
+  repetitions Int
+  restSeconds Int
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  personal     Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  workout      Workout  @relation(fields: [workoutId, personalId], references: [id, personalId], onDelete: Restrict)
+  personal Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  workout  Workout  @relation(fields: [workoutId, personalId], references: [id, personalId], onDelete: Restrict)
 
   @@unique([id, personalId])
   @@index([personalId, workoutId, dayOfWeek, position])
@@ -317,18 +336,18 @@ model WorkoutExercise {
 }
 
 model Exam {
-  id                      String     @id @default(uuid())
-  personalId              String
-  studentId               String
-  fileS3Key               String
-  status                  ExamStatus @default(PENDING_REVIEW)
-  extractedDataEncrypted  String?    // payload AES-256 (versão:iv:tag:cifra), base64
-  confirmedAt             DateTime?
-  createdAt               DateTime   @default(now())
-  updatedAt               DateTime   @updatedAt
+  id                     String     @id @default(uuid())
+  personalId             String
+  studentId              String
+  fileS3Key              String
+  status                 ExamStatus @default(PENDING_REVIEW)
+  extractedDataEncrypted String? // payload AES-256 (versão:iv:tag:cifra), base64
+  confirmedAt            DateTime?
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
 
-  personal    Personal   @relation(fields: [personalId], references: [id], onDelete: Restrict)
-  student     Student    @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  personal Personal @relation(fields: [personalId], references: [id], onDelete: Restrict)
+  student  Student  @relation(fields: [studentId], references: [id], onDelete: Restrict)
 
   @@unique([id, personalId])
   @@index([personalId, status])

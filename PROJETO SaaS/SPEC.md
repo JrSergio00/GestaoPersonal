@@ -1,8 +1,8 @@
-# Forma — Gestão do Personal
+# Ímpetus Fit — Gestão do Personal
 
 ## Visão geral
 
-Forma é uma plataforma web para apoiar a gestão diária de um personal trainer: organização de alunos, consulta de treinos, registro de pagamentos e acompanhamento financeiro. A aplicação é multi-tenant: cada personal acessa somente os dados associados à própria conta.
+Ímpetus Fit é uma plataforma web para apoiar a gestão diária de um personal trainer: organização de alunos, agenda de aulas, consulta de treinos, registro de pagamentos e acompanhamento financeiro. A aplicação é multi-tenant: cada personal acessa somente os dados associados à própria conta.
 
 Esta especificação descreve o modelo de dados existente e o comportamento implementado no código. Entidades presentes no banco, mas sem fluxo completo na interface/API, são identificadas como tal para distinguir a arquitetura prevista das funcionalidades já disponíveis.
 
@@ -27,20 +27,20 @@ Diretórios e arquivos importantes:
 
 ## Interface e identidade visual
 
-O documento HTML define o idioma `pt-BR`, o título **Forma — Gestão do Personal** e a descrição da aplicação. A interface é apresentada em português do Brasil.
+O documento HTML define o idioma `pt-BR`, o título **Ímpetus Fit — Gestão do Personal** e a descrição da aplicação. A interface é apresentada em português do Brasil.
 
 ### Navegação e telas disponíveis
 
-- **Visão geral:** resumo de alunos, treinos e finanças; gráfico de receita recebida em seis meses; contratos próximos do vencimento e alertas.
-- **Alunos:** listagem paginada, filtro por status, busca, cadastro básico e abertura dos detalhes de cada aluno.
-- **Detalhes do aluno:** dados cadastrais, total recebido, histórico de pagamentos e ação para registrar novo pagamento.
+- **Visão geral:** resumo de alunos, treinos e finanças; gráfico de receita recebida em seis meses; contratos próximos do vencimento, alertas e agenda semanal em kanban, com alunos sem horário definido.
+- **Alunos:** listagem paginada, filtro por status, busca, cadastro com agenda semanal e abertura dos detalhes de cada aluno.
+- **Detalhes do aluno:** dados cadastrais, horário e frequência semanal, total recebido, histórico de pagamentos e ação para registrar novo pagamento.
 - **Treinos:** criação de planos semanais por aluno, com grupos de exercícios nos dias escolhidos; consulta do treino ativo e do histórico; ativação e desativação manual.
 - **Financeiro:** totais do mês, valores a receber, receita recorrente, gráfico de seis meses e movimentações recentes.
 
 ### Comportamentos da interface
 
 - Navegação lateral com estado ativo, cabeçalho com busca e adaptação a telas menores.
-- Formulários em modal para cadastro de aluno e registro de pagamento.
+- Formulários em modal para cadastro/edição de agenda de aluno e registro de pagamento.
 - Mensagens de carregamento, erro, validação e confirmação de operação.
 - Valores exibidos em reais (BRL) e datas formatadas para `pt-BR`.
 - A sessão do Supabase Auth é persistida em `sessionStorage`.
@@ -75,8 +75,12 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 
 ### Alunos
 
-- Aluno pertence a um personal, tem nome, e-mail e status ativo/inativo.
+- Aluno pertence a um personal, tem nome, e-mail, duração da aula e status ativo/inativo.
 - E-mail é validado no cadastro.
+- Todo aluno novo deve ser criado com ao menos um dia semanal, horário inicial e duração de aula. A frequência semanal é derivada da quantidade de dias cadastrados.
+- O horário de início e a duração são iguais em todos os dias selecionados para o mesmo aluno; a aula não pode passar da meia-noite.
+- Aulas de alunos ativos do mesmo personal não podem se sobrepor no mesmo dia. Intervalos consecutivos são permitidos. Alunos antigos sem agenda permanecem válidos e aparecem no dashboard para configuração.
+- A edição de agenda substitui os dias anteriores de forma transacional. Reativar um aluno também valida conflito de agenda; desativar um aluno inativa o treino ativo, sem apagar históricos.
 - Registros anonimizados (`anonymizedAt` preenchido) não aparecem na listagem nem na consulta de detalhes.
 - O schema prevê retenção do histórico financeiro após anonimização; relações financeiras não usam exclusão em cascata.
 - A listagem apresenta o contrato mais recente, quando existir, e usa paginação de 50 itens.
@@ -101,6 +105,13 @@ As fontes são **DM Sans** (texto geral) e **Manrope** (títulos e valores desta
 - **Receita recorrente:** soma mensal (`monthlyAmount`) de contratos `SIGNED` cuja vigência inclui a data atual. Não é o total de pagamentos recebidos; pode ser zero mesmo quando há receitas avulsas confirmadas.
 - **Movimentações:** até dez lançamentos recentes, ordenados pela data de confirmação ou vencimento; receitas avulsas apresentam também a forma de pagamento quando disponível.
 - Valores monetários são convertidos para centavos durante as somas para reduzir erros de arredondamento.
+
+### Agenda semanal
+
+- Cada registro de agenda associa um aluno a um dia da semana e a um minuto de início (`startMinute`, contado desde 00:00); a duração é mantida no cadastro do aluno.
+- O dashboard devolve aulas de alunos ativos ordenadas por dia, horário e nome, incluindo duração e frequência semanal. A grade mostra os sete dias e permite abrir o detalhe do aluno.
+- Alunos ativos sem dias cadastrados são retornados separadamente para que o personal possa definir o horário sem recriar o cadastro.
+- Conflitos usam intervalos semiabertos `[início, fim)`: aulas podem começar exatamente quando outra termina.
 
 ### Treinos e revisão
 
@@ -131,6 +142,7 @@ O banco é PostgreSQL, com identificadores UUID armazenados como `TEXT`, datas `
 | `User` | `users` | Identidade, papel, provedor e vínculo opcional com `Personal` ou `Student`. |
 | `Personal` | `personals` | Conta do profissional e raiz dos dados de seu tenant. |
 | `Student` | `students` | Cadastro do aluno, estado ativo e campos de anonimização/CPF protegido. |
+| `StudentSchedule` | `student_schedules` | Dia da semana e minuto inicial da aula recorrente, vinculados ao aluno e tenant. |
 | `Contract` | `contracts` | Contrato entre personal e aluno; possui parcelas. |
 | `PaymentParcel` | `payment_parcels` | Parcela contratual com valor, vencimento, status e confirmação. |
 | `ExtraPayment` | `extra_payments` | Receita avulsa, opcionalmente ligada a um aluno; usada no registro de pagamento individual. |
@@ -151,6 +163,7 @@ O banco é PostgreSQL, com identificadores UUID armazenados como `TEXT`, datas `
 - `PaymentMethod`: `PIX`, `CASH`, `CREDIT_CARD`, `DEBIT_CARD`, `BANK_TRANSFER`, `OTHER`.
 - `LeadStatus`: `NEW`, `CONTACTED`, `QUALIFIED`, `CONVERTED`, `DISQUALIFIED`.
 - `ExamStatus`: `PENDING_REVIEW`, `CONFIRMED`, `REJECTED`.
+- `Weekday`: `MONDAY`, `TUESDAY`, `WEDNESDAY`, `THURSDAY`, `FRIDAY`, `SATURDAY`, `SUNDAY`.
 
 ### Integridade e privacidade
 
@@ -168,11 +181,13 @@ As rotas abaixo são montadas sob `/api` e, exceto `/api/config`, exigem autenti
 | --- | --- | --- |
 | `GET` | `/api/config` | Fornece URL e chave publicável do Supabase para inicializar o cliente web. |
 | `GET` | `/api/me` | Retorna nome e e-mail do personal autenticado. |
-| `GET` | `/api/dashboard` | Retorna métricas operacionais, contratos próximos e finanças. |
+| `GET` | `/api/dashboard` | Retorna métricas operacionais, contratos próximos, finanças e agenda semanal. |
 | `GET` | `/api/students` | Lista alunos com paginação e filtro de status. |
 | `GET` | `/api/students/options` | Busca alunos ativos para associar a um treino. |
-| `POST` | `/api/students` | Cadastra aluno com nome e e-mail. |
-| `GET` | `/api/students/:studentId` | Retorna dados do aluno e histórico de pagamentos. |
+| `POST` | `/api/students` | Cadastra aluno, duração e agenda semanal; rejeita sobreposição com `409`. |
+| `GET` | `/api/students/:studentId` | Retorna dados do aluno, agenda e histórico de pagamentos. |
+| `PATCH` | `/api/students/:studentId/schedule` | Atualiza duração, horário e dias; rejeita sobreposição com `409`. |
+| `PATCH` | `/api/students/:studentId` | Ativa/desativa aluno; reativação valida conflitos de agenda. |
 | `POST` | `/api/students/:studentId/payments` | Registra pagamento confirmado para aluno do tenant. |
 | `GET` | `/api/workouts` | Lista treinos ativos e históricos com exercícios e contagens de revisão. |
 | `POST` | `/api/workouts` | Cria plano ativo com exercícios; desativa o plano anterior do aluno na mesma transação. |
@@ -191,6 +206,9 @@ O schema Prisma é a referência declarativa; migrations manuais complementam as
 - `20261125000000_student_payment_method`: enum `PaymentMethod` e coluna `extra_payments.paymentMethod`, com padrão `OTHER`.
 - `20261125070000_create_student_workouts`: tabela de exercícios e restrições para valores válidos; preserva o plano ativo mais recentemente atualizado se houver duplicidades antigas e cria índice único parcial para garantir no máximo um treino ativo por aluno.
 - `20261125100400_add_weekdays_to_workout_exercises`: enum `Weekday` e coluna anulável `workout_exercises.dayOfWeek`; exercícios antigos ficam sem dia definido e novos planos recebem dias selecionados pelo usuário.
+- `20261125125600_add_workout_deactivation_date`: adiciona `workouts.deactivatedAt` e preenche a data para treinos já inativos.
+- `20261125140800_create_workout_tracking`: cria sessões de acompanhamento e registros por série, com checks e FKs compostas para manter o escopo do tenant, treino e exercício.
+- `20261125155000_add_student_class_schedules`: duração da aula, tabela de dias/horários por aluno, índices, validações e chaves estrangeiras compostas de tenant.
 
 Aplicar migrations versionadas com `npm run prisma:deploy`. Os scripts manuais devem ser executados conforme seus comentários e somente uma vez em cada banco. Não remover as restrições manuais ao gerar diferenças de schema.
 
@@ -214,6 +232,7 @@ Comandos definidos no `package.json`:
 | `npm run prisma:deploy` | Aplica migrations versionadas pendentes. |
 | `npm run test:student-payments` | Testa registro e leitura do histórico de pagamentos. |
 | `npm run test:workouts` | Testa criação, validação e troca de treino ativo. |
+| `npx vitest run --config vitest.unit.config.mts tests/student-schedule.test.ts` | Testa cadastro, conflito e edição da agenda semanal. |
 | `npm run test:auth` | Testa autenticação da API. |
 | `npm run test:supabase-rest` | Testa o adaptador Supabase REST. |
 | `npm run test:isolation` | Executa testes de isolamento multi-tenant no banco de teste configurado. |
@@ -222,6 +241,7 @@ Comandos definidos no `package.json`:
 
 - Pagamentos rejeitam valor inválido, data inexistente, forma desconhecida e aluno inexistente/fora do tenant.
 - Um pagamento válido é persistido como confirmado, tem forma e data registradas e aparece no histórico do aluno.
+- Cadastro e edição de agenda rejeitam horários sobrepostos, permitem aulas consecutivas, atualizam a frequência e alimentam as colunas corretas do kanban semanal.
 - Receitas confirmadas refletem-se no total mensal e no gráfico de seis meses; a janela inclui pagamentos datados para o dia atual.
 - Um treino válido exige aluno ativo e pelo menos um exercício; é criado ativo e desativa o plano ativo anterior do mesmo aluno.
 - Cada aluno tem no máximo um plano ativo; desativar ou reativar um treino preserva o histórico e a regra de exclusividade.
