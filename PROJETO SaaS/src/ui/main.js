@@ -226,6 +226,11 @@ function dashboard(data) {
 
   return `${pageHeading(`Olá, ${escapeHTML(currentUser.name.split(' ')[0])}! <span class="heading-wave">✦</span>`, 'Aqui está o resumo atualizado do seu negócio.')}
     ${connectionNote()}
+    <section class="card agenda-board-card">
+      <div class="card-heading"><div><h2>Agenda semanal</h2><p>Aulas recorrentes organizadas por dia e horário.</p></div></div>
+      <div class="agenda-board">${agendaDays}</div>
+      ${unscheduled ? `<div class="unscheduled-list"><h3>Alunos sem horário definido</h3>${unscheduled}</div>` : ''}
+    </section>
     <section class="metrics-grid" aria-label="Resumo do negócio">
       ${metricCard({ label: 'Alunos ativos', value: data.students.active, note: `${data.students.total} cadastrados`, change: `+${data.students.newThisMonth} este mês`, iconName: 'students', color: 'icon-blue', arrow: false })}
       ${metricCard({ label: 'Recebido neste mês', value: money(data.finance.monthlyRevenue), note: 'pagamentos confirmados', change: 'Mês atual', iconName: 'wallet', color: 'icon-green', arrow: false })}
@@ -247,11 +252,6 @@ function dashboard(data) {
     <section class="card attention-card">
       <div class="card-heading"><div><h2>Precisam da sua atenção</h2><p>Pendências calculadas a partir dos seus dados</p></div><button class="text-button" data-page="finance">Financeiro ${icon('arrowRight', 15)}</button></div>
       <div class="attention-items">${attentionRows}</div>
-    </section>
-    <section class="card agenda-board-card">
-      <div class="card-heading"><div><h2>Agenda semanal</h2><p>Aulas recorrentes organizadas por dia e horário.</p></div></div>
-      <div class="agenda-board">${agendaDays}</div>
-      ${unscheduled ? `<div class="unscheduled-list"><h3>Alunos sem horário definido</h3>${unscheduled}</div>` : ''}
     </section>`;
 }
 
